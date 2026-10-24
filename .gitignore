@@ -1,0 +1,7 @@
+正式版/build
+正式版/.zig-cache
+正式版/zig-out
+正式版/复扫雷.exe
+
+正式版/src/assets.zig
+正式版/src/atlas.bin

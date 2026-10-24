@@ -386,14 +386,98 @@ pub const REG_DWORD: u32 = 4;
 pub const REG_OPTION_NON_VOLATILE: u32 = 0;
 pub const ERROR_SUCCESS: i32 = 0;
 
-// ------------------------------------------------------------------ 内部运行时结构
-/// 所有 GDI 对象共用一个头部，便于从 ?*anyopaque 安全判型
-const ObjKind = enum(u8) { bitmap, brush, font, pen, stock };
-const GdiObj = struct { kind: ObjKind };
+// ================================================================== GTK3 交互绑定（Phase 3 Step B）
+// 手写 C ABI 绑定（不用 @cImport，避免翻译 GTK 庞大的头）：只声明本程序用到的符号。
+// 动态链接由 ../build.zig 的 linkSystemLibrary 负责；extern 后面的库名是文档性标注。
+const GtkWindowType = c_int;
+const GTK_WINDOW_TOPLEVEL: GtkWindowType = 0;
 
+const GtkWidget = opaque {};
+const GtkWindow = opaque {};
+const GtkContainer = opaque {};
+const cairo_t = opaque {};
+const cairo_surface_t = opaque {};
+
+const GCallback = ?*const fn () callconv(.c) void;
+const GSourceFunc = ?*const fn (?*anyopaque) callconv(.c) c_int;
+
+const GDK_BUTTON_PRESS_MASK: c_int = 0x100;
+const GDK_BUTTON_RELEASE_MASK: c_int = 0x200;
+const GDK_POINTER_MOTION_MASK: c_int = 0x40;
+const GDK_KEY_PRESS_MASK: c_int = 0x400;
+
+// GDK 事件结构：只声明到我们要读的字段，偏移按 x86_64 GTK3 ABI 自然对齐
+const GdkEventButton = extern struct {
+    type: c_int,
+    window: ?*anyopaque,
+    send_event: i8,
+    time: u32,
+    x: f64,
+    y: f64,
+    axes: ?[*]f64,
+    state: u32,
+    button: u32,
+    device: ?*anyopaque,
+    x_root: f64,
+    y_root: f64,
+};
+const GdkEventMotion = extern struct {
+    type: c_int,
+    window: ?*anyopaque,
+    send_event: i8,
+    time: u32,
+    x: f64,
+    y: f64,
+    axes: ?[*]f64,
+    state: u32,
+    is_hint: i16,
+    device: ?*anyopaque,
+    x_root: f64,
+    y_root: f64,
+};
+const GdkEventKey = extern struct {
+    type: c_int,
+    window: ?*anyopaque,
+    send_event: i8,
+    time: u32,
+    state: u32,
+    keyval: u32,
+};
+
+// cairo RGB24 每像素 32 位 = 小端去内存字节 [B,G,R,X]，与后端 32bpp BGRA 帧缓冲逐字节一致，
+// 高 8 位被忽略 → 等价于 Win32 BitBlt 的不透明拷贝。
+const CAIRO_FORMAT_RGB24: c_int = 1;
+
+pub extern "gtk-3" fn gtk_init(argc: ?*c_int, argv: ?*anyopaque) callconv(.c) void;
+pub extern "gtk-3" fn gtk_main() callconv(.c) void;
+pub extern "gtk-3" fn gtk_main_quit() callconv(.c) void;
+pub extern "gtk-3" fn gtk_window_new(t: GtkWindowType) callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_window_set_title(w: ?*GtkWindow, title: [*:0]const u8) callconv(.c) void;
+pub extern "gtk-3" fn gtk_window_set_resizable(w: ?*GtkWindow, resizable: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_container_add(c: ?*GtkContainer, child: ?*GtkWidget) callconv(.c) void;
+pub extern "gtk-3" fn gtk_drawing_area_new() callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_widget_show_all(w: ?*GtkWidget) callconv(.c) void;
+pub extern "gtk-3" fn gtk_widget_hide(w: ?*GtkWidget) callconv(.c) void;
+pub extern "gtk-3" fn gtk_widget_queue_draw(w: ?*GtkWidget) callconv(.c) void;
+pub extern "gtk-3" fn gtk_widget_queue_resize(w: ?*GtkWidget) callconv(.c) void;
+pub extern "gtk-3" fn gtk_widget_set_size_request(w: ?*GtkWidget, wd: c_int, ht: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_widget_set_can_focus(w: ?*GtkWidget, can_focus: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_widget_grab_focus(w: ?*GtkWidget) callconv(.c) void;
+pub extern "gtk-3" fn gtk_widget_add_events(w: ?*GtkWidget, events: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_widget_destroy(w: ?*GtkWidget) callconv(.c) void;
+// g_signal_connect 是宏，真实符号是 g_signal_connect_data（GConnectFlags 默认 0）
+pub extern "gobject-2.0" fn g_signal_connect_data(instance: ?*anyopaque, sig: [*:0]const u8, cb: GCallback, data: ?*anyopaque, destroy_data: ?*anyopaque, flags: c_int) callconv(.c) c_ulong;
+pub extern "glib-2.0" fn g_timeout_add(interval: c_uint, func: GSourceFunc, data: ?*anyopaque) callconv(.c) c_uint;
+pub extern "glib-2.0" fn g_source_remove(tag: c_uint) callconv(.c) c_int;
+pub extern "cairo" fn cairo_image_surface_create_for_data(data: [*]u8, format: c_int, width: c_int, height: c_int, stride: c_int) callconv(.c) ?*cairo_surface_t;
+pub extern "cairo" fn cairo_surface_destroy(s: ?*cairo_surface_t) callconv(.c) void;
+pub extern "cairo" fn cairo_set_source_surface(cr: ?*cairo_t, s: ?*cairo_surface_t, x: f64, y: f64) callconv(.c) void;
+pub extern "cairo" fn cairo_paint(cr: ?*cairo_t) callconv(.c) void;
+
+// ------------------------------------------------------------------ 内部运行时结构
+// ------------------------------------------------------------------ 内部运行时结构
 /// 32bpp 自顶向下 BGRA 位图：与 Win32 DIB 逐字节一致（SRCCOPY 就是 4 字节拷贝）
 const Bitmap = struct {
-    kind: ObjKind = .bitmap,
     w: i32,
     h: i32,
     stride: usize, // = w*4
@@ -401,13 +485,74 @@ const Bitmap = struct {
 };
 
 const Brush = struct {
-    kind: ObjKind = .brush,
     color: DWORD,
 };
 
+// GDI 对象用「指针身份寄存器」判型：绝不通过 @ptrCast 到别的结构体类型去读类型头。
+// Zig 0.14 的类型别名分析会让跨类型读拿到陈旧/脏数据（page_allocator 复用页 + 死 store 消除）。
+const MAX_BMP = 64;
+const MAX_BR = 32;
+var g_bitmaps: [MAX_BMP]?*Bitmap = [_]?*Bitmap{null} ** MAX_BMP;
+var g_brushes: [MAX_BR]?*Brush = [_]?*Brush{null} ** MAX_BR;
+
+fn regBitmap(b: *Bitmap) void {
+    for (&g_bitmaps) |*slot| {
+        if (slot.* == null) {
+            slot.* = b;
+            return;
+        }
+    }
+}
+fn unregBitmap(b: *Bitmap) void {
+    for (&g_bitmaps) |*slot| {
+        if (slot.*) |bb| {
+            if (bb == b) {
+                slot.* = null;
+                return;
+            }
+        }
+    }
+}
+fn regBrush(b: *Brush) void {
+    for (&g_brushes) |*slot| {
+        if (slot.* == null) {
+            slot.* = b;
+            return;
+        }
+    }
+}
+fn unregBrush(b: *Brush) void {
+    for (&g_brushes) |*slot| {
+        if (slot.*) |bb| {
+            if (bb == b) {
+                slot.* = null;
+                return;
+            }
+        }
+    }
+}
+
+inline fn asBitmap(o: HGDIOBJ) ?*Bitmap {
+    const addr = @intFromPtr(o orelse return null);
+    for (g_bitmaps) |b| {
+        if (b) |bb| {
+            if (@intFromPtr(bb) == addr) return bb;
+        }
+    }
+    return null;
+}
+inline fn asBrush(o: HGDIOBJ) ?*Brush {
+    const addr = @intFromPtr(o orelse return null);
+    for (g_brushes) |b| {
+        if (b) |bb| {
+            if (@intFromPtr(bb) == addr) return bb;
+        }
+    }
+    return null;
+}
+
 /// 设备上下文：内存 DC 选一张位图；窗口 DC 指向窗口（交互式绘制用，暂未接入 cairo）
 const Dc = struct {
-    kind: ObjKind = .stock,
     bmp: ?*Bitmap = null,
     win: ?*Window = null,
     stretch_mode: i32 = 3, // COLORONCOLOR=3（最近邻），与 Win32 SetStretchBltMode(3) 一致
@@ -425,11 +570,18 @@ const Menu = struct {
     count: usize = 0,
 };
 
-/// 逻辑窗口：客户区尺寸 + 菜单栏/控件 ID + 文本 + 父子关系
+/// 逻辑窗口：客户区尺寸 + 菜单栏/控件 ID + 文本 + 父子关系 + GTK 挂载点
 const MAX_TEXT = 128;
 const MAX_CHILD = 28;
+const MAX_TIMERS = 4;
+const WinTimer = struct { id: usize = 0, tag: c_uint = 0, active: bool = false, win: ?*Window = null };
 const Window = struct {
     rect: RECT = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
+    proc: ?WNDPROC = null, // 窗口过程（RegisterClassExW 保存，交互消息分派用）
+    gtk_win: ?*GtkWidget = null,
+    draw_area: ?*GtkWidget = null,
+    fb: ?*Bitmap = null, // 客户区帧缓冲（32bpp BGRA，draw 回调里上传 cairo）
+    timers: [MAX_TIMERS]WinTimer = [_]WinTimer{.{}} ** MAX_TIMERS,
     menu: ?*Menu = null,
     id: i32 = -1, // 子控件 ID（对话框用）；-1 = 无
     parent: ?*Window = null,
@@ -438,6 +590,15 @@ const Window = struct {
     children: [MAX_CHILD]?*Window = [_]?*Window{null} ** MAX_CHILD,
     child_count: usize = 0,
 };
+
+// 窗口类注册表：RegisterClassExW 存 WndProc，CreateWindowExW 按类名查回
+const MAX_CLASS = 8;
+const WndClassRec = struct {
+    name: [64]u16 = [_]u16{0} ** 64,
+    proc: ?WNDPROC = null,
+};
+var wnd_classes: [MAX_CLASS]WndClassRec = [_]WndClassRec{.{}} ** MAX_CLASS;
+var wnd_class_count: usize = 0;
 
 fn copyWstr(dst: []u16, src: LPCWSTR) usize {
     const s = src orelse return 0;
@@ -471,16 +632,6 @@ inline fn asDc(dc: HDC) ?*Dc {
     const dp = dc orelse return null;
     return @ptrCast(@alignCast(dp));
 }
-inline fn asGdiObj(o: HGDIOBJ) ?*GdiObj {
-    if (o == null or isStock(o)) return null;
-    const op = o.?;
-    return @ptrCast(@alignCast(op));
-}
-inline fn asBitmap(o: HGDIOBJ) ?*Bitmap {
-    const g = asGdiObj(o) orelse return null;
-    if (g.kind != .bitmap) return null;
-    return @ptrCast(@alignCast(g));
-}
 
 // ------------------------------------------------------------------ 位图 / 设备上下文
 pub fn CreateDIBSection(dc: HDC, bi: *const BITMAPINFO, usage: UINT, bits: *?*anyopaque, hsec: HANDLE, off: DWORD) HBITMAP {
@@ -496,7 +647,11 @@ pub fn CreateDIBSection(dc: HDC, bi: *const BITMAPINFO, usage: UINT, bits: *?*an
     const n = pw * ph * 4;
     const mem = page.alloc(u8, n) catch return null;
     const bmp = page.create(Bitmap) catch return null;
-    bmp.* = .{ .w = @intCast(pw), .h = @intCast(ph), .stride = pw * 4, .pixels = mem.ptr };
+    bmp.w = @intCast(pw);
+    bmp.h = @intCast(ph);
+    bmp.stride = pw * 4;
+    bmp.pixels = mem.ptr;
+    regBitmap(bmp);
     bits.* = @ptrCast(mem.ptr);
     return @ptrCast(bmp);
 }
@@ -504,7 +659,7 @@ pub fn CreateDIBSection(dc: HDC, bi: *const BITMAPINFO, usage: UINT, bits: *?*an
 pub fn CreateCompatibleDC(dc: HDC) HDC {
     _ = dc;
     const d = page.create(Dc) catch return null;
-    d.* = .{ .kind = .stock, .bmp = null, .win = null };
+    d.* = .{ .bmp = null, .win = null };
     return @ptrCast(d);
 }
 
@@ -542,28 +697,25 @@ pub fn SelectObject(dc: HDC, obj: HGDIOBJ) HGDIOBJ {
         d.bmp = null;
         return @ptrCast(old);
     }
-    if (asGdiObj(obj)) |o| {
-        if (o.kind == .bitmap) {
-            const old = d.bmp;
-            d.bmp = asBitmap(obj);
-            return @ptrCast(old);
-        }
+    if (asBitmap(obj)) |bmp| {
+        const old = d.bmp;
+        d.bmp = bmp;
+        return @ptrCast(old);
     }
     return null; // 笔 / 刷 / 字体不选进 DC（本程序用不到）
 }
 
 pub fn DeleteObject(obj: HGDIOBJ) BOOL {
     if (asBitmap(obj)) |b| {
+        unregBitmap(b);
         page.free(b.pixels[0 .. b.stride * @as(usize, @intCast(b.h))]);
         page.destroy(b);
         return TRUE;
     }
-    if (asGdiObj(obj)) |o| {
-        switch (o.kind) {
-            .brush => page.destroy(@as(*Brush, @ptrCast(@alignCast(o)))),
-            .font, .pen, .stock => page.destroy(o),
-            .bitmap => {},
-        }
+    if (asBrush(obj)) |b| {
+        unregBrush(b);
+        page.destroy(b);
+        return TRUE;
     }
     return TRUE;
 }
@@ -575,12 +727,12 @@ pub fn DeleteDC(dc: HDC) BOOL {
 }
 
 /// 屏幕 DC（GetDC(null)）：一个不挂位图的共享 DC
-var screen_dc: Dc = .{ .kind = .stock, .bmp = null, .win = null };
+var screen_dc: Dc = .{ .bmp = null, .win = null };
 
 pub fn GetDC(hwnd: HWND) HDC {
     if (hwnd == null) return @ptrCast(&screen_dc);
     const d = page.create(Dc) catch return @ptrCast(&screen_dc);
-    d.* = .{ .kind = .stock, .bmp = null, .win = asWindow(hwnd) };
+    d.* = .{ .bmp = null, .win = asWindow(hwnd) };
     return @ptrCast(d);
 }
 
@@ -593,7 +745,8 @@ pub fn ReleaseDC(hwnd: HWND, dc: HDC) i32 {
 
 pub fn CreateSolidBrush(color: DWORD) HBRUSH {
     const b = page.create(Brush) catch return null;
-    b.* = .{ .kind = .brush, .color = color };
+    b.color = color;
+    regBrush(b);
     return @ptrCast(b);
 }
 
@@ -605,7 +758,7 @@ pub fn GetStockObject(i: i32) HGDIOBJ {
 pub fn FillRect(dc: HDC, r: *const RECT, br: HBRUSH) i32 {
     const d: *Dc = @ptrCast(@alignCast(dc orelse return 0));
     const bmp = d.bmp orelse return 0;
-    const br_obj: *Brush = @ptrCast(@alignCast(br orelse return 0));
+    const br_obj = asBrush(br) orelse return 0;
     const c = br_obj.color;
     const b = @as(u8, @intCast(c & 0xFF));
     const g = @as(u8, @intCast((c >> 8) & 0xFF));
@@ -762,6 +915,102 @@ pub fn GetSystemMetrics(i: i32) i32 {
     };
 }
 
+// ------------------------------------------------------------------ GTK 运行时（Phase 3 Step B）
+var gtk_started = false;
+var draw_cr: ?*cairo_t = null;
+var capture_win: HWND = null;
+
+fn ensureGtk() void {
+    if (gtk_started) return;
+    gtk_started = true;
+    var argc: c_int = 0;
+    gtk_init(&argc, null);
+}
+
+fn wstrEq(buf: []const u16, s: LPCWSTR) bool {
+    const p = s orelse return false;
+    var i: usize = 0;
+    while (i < buf.len) : (i += 1) {
+        if (buf[i] != p[i]) return false;
+        if (buf[i] == 0) return true;
+    }
+    return false;
+}
+
+fn findClass(name: LPCWSTR) ?*WndClassRec {
+    const s = name orelse return null;
+    for (wnd_classes[0..wnd_class_count]) |*rc| {
+        if (wstrEq(&rc.name, s)) return rc;
+    }
+    return null;
+}
+
+fn wideToUtf8Z(buf: []u8, s: []const u16) [:0]const u8 {
+    const n = std.unicode.utf16LeToUtf8(buf, s) catch 0;
+    if (n >= buf.len) return buf[0..0 :0];
+    buf[n] = 0;
+    return buf[0..n :0];
+}
+
+fn ensureFramebuffer(win: *Window) void {
+    const cw = win.rect.right;
+    const ch = win.rect.bottom;
+    if (cw <= 0 or ch <= 0) return;
+    if (win.fb) |fb| {
+        if (fb.w == cw and fb.h == ch) return;
+        _ = DeleteObject(@ptrCast(fb));
+        win.fb = null;
+    }
+    win.fb = asBitmap(CreateCompatibleBitmap(null, cw, ch));
+}
+
+fn flushToCairo(win: *Window, cr: ?*cairo_t) void {
+    const cr2 = cr orelse return;
+    const fb = win.fb orelse return;
+    const surf = cairo_image_surface_create_for_data(fb.pixels, CAIRO_FORMAT_RGB24, fb.w, fb.h, @intCast(fb.stride));
+    defer cairo_surface_destroy(surf);
+    cairo_set_source_surface(cr2, surf, 0, 0);
+    cairo_paint(cr2);
+}
+
+fn fireMouse(win: *Window, msg: UINT, x: f64, y: f64) void {
+    const ix: i32 = @intFromFloat(x);
+    const iy: i32 = @intFromFloat(y);
+    if (win.proc) |p| _ = p(@ptrCast(win), msg, 0, makeLParam(ix, iy));
+}
+
+/// GDK keysym → Win32 虚键码（本程序只用 F 键重开；0x72 在 Win32 里是 VK_F3）
+fn gdkKeyToVk(keyval: u32) WPARAM {
+    if (keyval >= 0xFFBE and keyval <= 0xFFC9) return keyval - 0xFFBE + 0x70; // F1..F12
+    return keyval;
+}
+
+fn buildGtkWindow(win: *Window) void {
+    if (win.gtk_win != null) return;
+    ensureGtk();
+    const gw = gtk_window_new(GTK_WINDOW_TOPLEVEL) orelse return;
+    win.gtk_win = gw;
+    var buf: [MAX_TEXT * 4]u8 = [_]u8{0} ** (MAX_TEXT * 4);
+    gtk_window_set_title(@ptrCast(gw), wideToUtf8Z(&buf, win.text[0..win.text_len]).ptr);
+    const cw = win.rect.right;
+    const ch = win.rect.bottom;
+    const da = gtk_drawing_area_new() orelse return;
+    win.draw_area = da;
+    gtk_widget_set_size_request(da, cw, ch);
+    gtk_widget_add_events(da, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK | GDK_KEY_PRESS_MASK);
+    gtk_widget_set_can_focus(da, 1);
+    gtk_container_add(@ptrCast(gw), da);
+    gtk_window_set_resizable(@ptrCast(gw), 0);
+    ensureFramebuffer(win);
+    _ = g_signal_connect_data(@ptrCast(da), "draw", @ptrCast(&onDraw), @ptrCast(win), null, 0);
+    _ = g_signal_connect_data(@ptrCast(da), "button-press-event", @ptrCast(&onButtonPress), @ptrCast(win), null, 0);
+    _ = g_signal_connect_data(@ptrCast(da), "button-release-event", @ptrCast(&onButtonRelease), @ptrCast(win), null, 0);
+    _ = g_signal_connect_data(@ptrCast(da), "motion-notify-event", @ptrCast(&onMotion), @ptrCast(win), null, 0);
+    _ = g_signal_connect_data(@ptrCast(da), "key-press-event", @ptrCast(&onKeyPress), @ptrCast(win), null, 0);
+    _ = g_signal_connect_data(@ptrCast(gw), "delete-event", @ptrCast(&onDeleteEvent), @ptrCast(win), null, 0);
+    _ = g_signal_connect_data(@ptrCast(gw), "destroy", @ptrCast(&onDestroyEvent), @ptrCast(win), null, 0);
+}
+
 // ------------------------------------------------------------------ 窗口 / 消息循环
 pub fn GetModuleHandleW(name: LPCWSTR) HMODULE {
     _ = name;
@@ -769,13 +1018,16 @@ pub fn GetModuleHandleW(name: LPCWSTR) HMODULE {
 }
 
 pub fn RegisterClassExW(wc: *const WNDCLASSEXW) ATOM {
-    _ = wc;
-    return 1;
+    if (wnd_class_count >= MAX_CLASS) return 0;
+    const rec = &wnd_classes[wnd_class_count];
+    _ = copyWstr(&rec.name, wc.lpszClassName);
+    rec.proc = wc.lpfnWndProc;
+    wnd_class_count += 1;
+    return @intCast(wnd_class_count);
 }
 
 pub fn CreateWindowExW(exstyle: DWORD, class: LPCWSTR, title: LPCWSTR, style: DWORD, x: i32, y: i32, w: i32, h: i32, parent: HWND, menu: HMENU, hinst: HINSTANCE, param: ?*anyopaque) HWND {
     _ = exstyle;
-    _ = class;
     _ = x;
     _ = y;
     _ = hinst;
@@ -791,6 +1043,7 @@ pub fn CreateWindowExW(exstyle: DWORD, class: LPCWSTR, title: LPCWSTR, style: DW
         .children = [_]?*Window{null} ** MAX_CHILD,
         .child_count = 0,
     };
+    win.proc = if (findClass(class)) |rc| rc.proc else null;
     const is_child = (style & WS.CHILD) != 0;
     if (is_child) {
         // 子控件的第 9 个参数（hMenu 位）装的是控件 ID（@ptrFromInt(IDC_*)）
@@ -807,9 +1060,101 @@ pub fn CreateWindowExW(exstyle: DWORD, class: LPCWSTR, title: LPCWSTR, style: DW
     return @ptrCast(win);
 }
 
+fn onDraw(widget: ?*GtkWidget, cr: ?*cairo_t, user: ?*anyopaque) callconv(.c) c_int {
+    _ = widget;
+    const win: *Window = @ptrCast(@alignCast(user.?));
+    draw_cr = cr;
+    if (win.proc) |p| _ = p(@ptrCast(win), WM.PAINT, 0, 0);
+    draw_cr = null;
+    return 1;
+}
+fn onButtonPress(widget: ?*GtkWidget, ev: ?*anyopaque, user: ?*anyopaque) callconv(.c) c_int {
+    _ = widget;
+    const win: *Window = @ptrCast(@alignCast(user.?));
+    const e: *GdkEventButton = @ptrCast(@alignCast(ev.?));
+    const msg: UINT = switch (e.button) {
+        1 => WM.LBUTTONDOWN,
+        2 => WM.MBUTTONDOWN,
+        3 => WM.RBUTTONDOWN,
+        else => return 0,
+    };
+    fireMouse(win, msg, e.x, e.y);
+    return 1;
+}
+fn onButtonRelease(widget: ?*GtkWidget, ev: ?*anyopaque, user: ?*anyopaque) callconv(.c) c_int {
+    _ = widget;
+    const win: *Window = @ptrCast(@alignCast(user.?));
+    const e: *GdkEventButton = @ptrCast(@alignCast(ev.?));
+    const msg: UINT = switch (e.button) {
+        1 => WM.LBUTTONUP,
+        2 => WM.MBUTTONUP,
+        3 => WM.RBUTTONUP,
+        else => return 0,
+    };
+    fireMouse(win, msg, e.x, e.y);
+    return 1;
+}
+fn onMotion(widget: ?*GtkWidget, ev: ?*anyopaque, user: ?*anyopaque) callconv(.c) c_int {
+    _ = widget;
+    const win: *Window = @ptrCast(@alignCast(user.?));
+    const e: *GdkEventMotion = @ptrCast(@alignCast(ev.?));
+    fireMouse(win, WM.MOUSEMOVE, e.x, e.y);
+    return 0;
+}
+fn onKeyPress(widget: ?*GtkWidget, ev: ?*anyopaque, user: ?*anyopaque) callconv(.c) c_int {
+    _ = widget;
+    const win: *Window = @ptrCast(@alignCast(user.?));
+    const e: *GdkEventKey = @ptrCast(@alignCast(ev.?));
+    if (win.proc) |p| _ = p(@ptrCast(win), WM.KEYDOWN, gdkKeyToVk(e.keyval), 0);
+    return 1;
+}
+fn onDeleteEvent(widget: ?*GtkWidget, ev: ?*anyopaque, user: ?*anyopaque) callconv(.c) c_int {
+    _ = widget;
+    _ = ev;
+    const win: *Window = @ptrCast(@alignCast(user.?));
+    if (win.proc) |p| _ = p(@ptrCast(win), WM.CLOSE, 0, 0);
+    return 1; // 手动处理关闭，GTK 别再销毁
+}
+fn onDestroyEvent(widget: ?*GtkWidget, user: ?*anyopaque) callconv(.c) void {
+    _ = widget;
+    const win: *Window = @ptrCast(@alignCast(user.?));
+    win.gtk_win = null;
+    win.draw_area = null;
+    if (win.proc) |p| _ = p(@ptrCast(win), WM.DESTROY, 0, 0);
+}
+
+fn timerCallback(data: ?*anyopaque) callconv(.c) c_int {
+    const t: *WinTimer = @ptrCast(@alignCast(data.?));
+    const id = t.id;
+    const win = t.win orelse return 0;
+    if (win.proc) |p| _ = p(@ptrCast(win), WM.TIMER, id, 0);
+    return if (t.active and t.id == id) 1 else 0;
+}
+fn killTimerId(win: *Window, id: usize) void {
+    for (&win.timers) |*t| {
+        if (t.active and t.id == id) {
+            _ = g_source_remove(t.tag);
+            t.active = false;
+        }
+    }
+}
+
 pub fn DestroyWindow(hwnd: HWND) BOOL {
-    const w = asWindow(hwnd) orelse return FALSE;
-    page.destroy(w);
+    const win = asWindow(hwnd) orelse return FALSE;
+    for (&win.timers) |*t| {
+        if (t.active) {
+            _ = g_source_remove(t.tag);
+            t.active = false;
+        }
+    }
+    if (win.fb) |fb| {
+        _ = DeleteObject(@ptrCast(fb));
+        win.fb = null;
+    }
+    if (win.gtk_win) |gw| gtk_widget_destroy(gw); // 同步触发 destroy 信号 → onDestroy
+    win.gtk_win = null;
+    win.draw_area = null;
+    page.destroy(win);
     return TRUE;
 }
 
@@ -822,18 +1167,27 @@ pub fn DefWindowProcW(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM) LRESULT {
 }
 
 pub fn ShowWindow(hwnd: HWND, cmd: i32) BOOL {
-    _ = hwnd;
-    _ = cmd;
-    return TRUE; // TODO(Phase 3 Step B)：接 gtk_widget_show_all
+    const win = asWindow(hwnd) orelse return FALSE;
+    if (cmd == SW.HIDE) {
+        if (win.gtk_win) |gw| gtk_widget_hide(gw);
+        return TRUE;
+    }
+    if (cmd != SW.SHOW) return TRUE; // SHOWNA(8) 等留给抓图阶段（Phase 6）
+    buildGtkWindow(win);
+    gtk_widget_show_all(win.gtk_win orelse return FALSE);
+    if (win.draw_area) |da| gtk_widget_grab_focus(da);
+    return TRUE;
 }
 
 pub fn UpdateWindow(hwnd: HWND) BOOL {
-    _ = hwnd;
+    const win = asWindow(hwnd) orelse return FALSE;
+    if (win.draw_area) |da| gtk_widget_queue_draw(da);
     return TRUE;
 }
 
 pub fn PostQuitMessage(code: i32) void {
-    _ = code; // TODO(Phase 3 Step B)：接 gtk_main_quit
+    _ = code;
+    gtk_main_quit();
 }
 
 pub fn GetMessageW(msg: *MSG, hwnd: HWND, min: UINT, max: UINT) BOOL {
@@ -841,7 +1195,9 @@ pub fn GetMessageW(msg: *MSG, hwnd: HWND, min: UINT, max: UINT) BOOL {
     _ = hwnd;
     _ = min;
     _ = max;
-    @panic("GTK 消息循环尚未接入（Phase 3 Step B）");
+    ensureGtk();
+    gtk_main(); // 阻塞直到 onDestroy → PostQuitMessage → gtk_main_quit
+    return 0;
 }
 
 pub fn TranslateMessage(msg: *const MSG) BOOL {
@@ -854,22 +1210,28 @@ pub fn DispatchMessageW(msg: *const MSG) LRESULT {
     return 0;
 }
 
-/// 测试路径不会走到真实绘制；给出共享 DC 兜底
 pub fn BeginPaint(hwnd: HWND, ps: *PAINTSTRUCT) HDC {
-    _ = hwnd;
+    const win = asWindow(hwnd);
+    if (win) |w0| ensureFramebuffer(w0);
+    const d = page.create(Dc) catch return @ptrCast(&screen_dc);
+    d.* = .{
+        .bmp = if (win) |w0| w0.fb else null,
+        .win = win,
+    };
     ps.* = .{
-        .hdc = @ptrCast(&screen_dc),
+        .hdc = @ptrCast(d),
         .fErase = FALSE,
-        .rcPaint = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
+        .rcPaint = .{ .left = 0, .top = 0, .right = if (win) |w0| w0.rect.right else 0, .bottom = if (win) |w0| w0.rect.bottom else 0 },
         .fRestore = FALSE,
         .fIncUpdate = FALSE,
         .rgbReserved = [_]u8{0} ** 32,
     };
-    return @ptrCast(&screen_dc);
+    return @ptrCast(d);
 }
 pub fn EndPaint(hwnd: HWND, ps: *const PAINTSTRUCT) BOOL {
-    _ = hwnd;
-    _ = ps;
+    if (asWindow(hwnd)) |win| if (draw_cr) |cr| flushToCairo(win, cr);
+    const d = asDc(ps.hdc);
+    if (d) |dd| if (dd != &screen_dc) page.destroy(dd);
     return TRUE;
 }
 
@@ -886,10 +1248,11 @@ pub fn GetWindowRect(hwnd: HWND, r: *RECT) BOOL {
 }
 
 pub fn InvalidateRect(hwnd: HWND, r: ?*const RECT, erase: BOOL) BOOL {
-    _ = hwnd;
     _ = r;
     _ = erase;
-    return TRUE; // TODO(Phase 3 Step B)：接 gtk_widget_queue_draw
+    const win = asWindow(hwnd) orelse return FALSE;
+    if (win.draw_area) |da| gtk_widget_queue_draw(da);
+    return TRUE;
 }
 
 pub fn AdjustWindowRect(r: *RECT, style: DWORD, menu: BOOL) BOOL {
@@ -903,32 +1266,45 @@ pub fn SetWindowPos(hwnd: HWND, after: HWND, x: i32, y: i32, w: i32, h: i32, fla
     _ = after;
     _ = x;
     _ = y;
-    const win: *Window = @ptrCast(@alignCast(hwnd orelse return FALSE));
+    _ = flags;
+    const win = asWindow(hwnd) orelse return FALSE;
     win.rect.right = w;
     win.rect.bottom = h;
-    _ = flags;
+    if (win.draw_area) |da| gtk_widget_set_size_request(da, w, h);
+    if (win.gtk_win) |gw| gtk_widget_queue_resize(gw);
     return TRUE;
 }
 
 pub fn SetCapture(hwnd: HWND) HWND {
-    return hwnd;
+    const old = capture_win;
+    capture_win = hwnd;
+    return old;
 }
 pub fn ReleaseCapture() BOOL {
+    capture_win = null;
     return TRUE;
 }
 pub fn GetCapture() HWND {
-    return null;
+    return capture_win;
 }
 
 pub fn SetTimer(hwnd: HWND, id: usize, ms: UINT, cb: ?*anyopaque) usize {
-    _ = hwnd;
-    _ = ms;
     _ = cb;
-    return id | 1; // TODO(Phase 3 Step B)：接 g_timeout_add
+    const win = asWindow(hwnd) orelse return 0;
+    killTimerId(win, id); // 同 id 先替换（对齐 Win32 SetTimer 的覆盖语义）
+    for (&win.timers) |*t| {
+        if (t.active) continue;
+        t.id = id;
+        t.win = win;
+        t.tag = g_timeout_add(ms, @ptrCast(&timerCallback), @ptrCast(t));
+        t.active = true;
+        return id;
+    }
+    return 0;
 }
 pub fn KillTimer(hwnd: HWND, id: usize) BOOL {
-    _ = hwnd;
-    _ = id;
+    const win = asWindow(hwnd) orelse return FALSE;
+    killTimerId(win, id);
     return TRUE;
 }
 

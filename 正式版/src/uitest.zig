@@ -94,7 +94,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
     }
     out.writer().print("复扫雷 {s} · 界面自检（消息级）\n====================================\n", .{ui.testAppVersion}) catch {};
 
-// 0) 窗口标题
+    // 0) 窗口标题
     {
         var wb: [256]u8 = undefined;
         const t = u16ToUtf8(&wb, ui.testWindowTitle());
@@ -106,7 +106,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("0 窗口标题：[{s}]\n", .{t}) catch {};
     }
 
-// 0b) 版本号 / 关于文案 / 玩法文案
+    // 0b) 版本号 / 关于文案 / 玩法文案
     {
         const v = ui.testAppVersion;
         var dots: usize = 0;
@@ -124,7 +124,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, std.mem.indexOf(u8, about, v) != null, "「关于」正文里应带着版本号");
         expect(out, std.mem.indexOf(u8, about, "复扫雷 Complexweeper") != null, "「关于」里的程序名应是「复扫雷 Complexweeper」");
         expect(out, std.mem.indexOf(u8, about, "Complexweeper") != null, "「关于」里应有英文名 Complexweeper");
-        var hb: [1024]u8 = undefined;
+        var hb: [4096]u8 = undefined;
         const help = u16ToUtf8(&hb, std.mem.span(ui.testHelpText));
         expect(out, std.mem.indexOf(u8, help, "分别是正实雷、负实雷、正虚雷、负虚雷") != null, "四种雷仍按雷的名字列（正实雷…）");
         expect(out, std.mem.indexOf(u8, help, "正实雷（正类空雷）、负实雷（负类空雷）、正双曲虚雷（正类时雷）、负双曲虚雷（负类时雷）") != null, "双曲（闵可夫斯基）模式那段应写四种雷的全名");
@@ -134,7 +134,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("0b 版本号：[{s}] · 关于程序名：[复扫雷 Complexweeper]\n", .{v}) catch {};
     }
 
-// 1) 难度菜单
+    // 1) 难度菜单
     ui.testCommand(ui.test_IDM_BEGINNER);
     expect(out, ui.game_ptr.w == 9 and ui.game_ptr.h == 9 and ui.game_ptr.mines == 10, "初级菜单应切成 9×9/10");
     ui.testCommand(ui.test_IDM_INTERMEDIATE);
@@ -143,7 +143,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
     expect(out, ui.game_ptr.w == 30 and ui.game_ptr.h == 16 and ui.game_ptr.mines == 99, "高级菜单应切成 30×16/99");
     out.writer().print("1 难度菜单：通过\n", .{}) catch {};
 
-// 2) 缩放与菜单结构
+    // 2) 缩放与菜单结构
     ui.testCommand(ui.test_IDM_ZOOM1);
     expect(out, ui.testZoom() == 1, "缩放菜单应切到 100%");
     ui.testCommand(ui.test_IDM_ZOOM3);
@@ -158,7 +158,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
     expect(out, ui.testMenuHasId(ui.test_IDM_HYPER_BEST), "闵可夫斯基模式子菜单里应有「最高分纪录」");
     out.writer().print("2 缩放菜单：通过\n", .{}) catch {};
 
-// 3) 左键：按下预览、松开翻开
+    // 3) 左键：按下预览、松开翻开
     const L = ui.testLayout();
     const cx = L.board_x + @as(i32, @intCast(ui.game_ptr.w / 2)) * L.cell + @divTrunc(L.cell, 2);
     const cy = L.board_y + @as(i32, @intCast(ui.game_ptr.h / 2)) * L.cell + @divTrunc(L.cell, 2);
@@ -180,7 +180,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
     expect(out, !ui.testFaceSpriteIsScan(), "闪完应回到普通脸");
     out.writer().print("3 左键按下预览 / 松开翻开：翻开 {d} 格\n", .{ui.game_ptr.openedCount()}) catch {};
 
-// 3b) 拖动换格 / 拖出棋盘取消
+    // 3b) 拖动换格 / 拖出棋盘取消
     {
         var t1: i32 = -1;
         var t2: i32 = -1;
@@ -228,7 +228,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("3b 拖动预览 / 拖出取消：通过\n", .{}) catch {};
     }
 
-// 4) 右键循环插旗（含连点）
+    // 4) 右键循环插旗（含连点）
     expect(out, !ui.game_ptr.over, "第 4 组开始时局面应还在进行中");
     var closed: i32 = -1;
     for (0..ui.game_ptr.n) |k| {
@@ -263,7 +263,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
     expect(out, ui.game_ptr.flag[@intCast(closed)] == 0, "第五次右键应循环回空");
     out.writer().print("4 右键循环插旗（含连点）/ 中键不清旗：通过\n", .{}) catch {};
 
-// 4d) 计雷器符号与 i 单位
+    // 4d) 计雷器符号与 i 单位
     {
         expect(out, !ui.game_ptr.over, "第 4d 组开始时局面应还在进行中");
         var t: usize = 1;
@@ -330,7 +330,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("4d 计雷器符号与 i 单位：通过\n", .{}) catch {};
     }
 
-// 4b) 开局前插旗，且活过开局
+    // 4b) 开局前插旗，且活过开局
     {
         ui.testCommand(ui.test_IDM_NEW);
         expect(out, !ui.game_ptr.started, "重开后应回到未开局");
@@ -355,7 +355,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("4b 开局前插旗 / 活过开局：通过\n", .{}) catch {};
     }
 
-// 4c) 旗子保护格子
+    // 4c) 旗子保护格子
     {
         var t: i32 = -1;
         for (0..ui.game_ptr.n) |k| {
@@ -384,7 +384,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("4c 旗子保护格子：通过\n", .{}) catch {};
     }
 
-// 5) 人脸重开
+    // 5) 人脸重开
     const face_x = ui.testFaceX() + 13 * L.z;
     const face_y = ui.testFaceY() + 13 * L.z;
     ui.testMouse(w.MouseMsg.left_down, face_x, face_y);
@@ -396,15 +396,15 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
     expect(out, !ui.testFaceDown(), "重开后脸应恢复正常");
     out.writer().print("5 人脸重开：通过\n", .{}) catch {};
 
-// 6) 键盘 F2
+    // 6) 键盘 F3
     ui.testMouse(w.MouseMsg.left_down, cx, cy);
     ui.testMouse(w.MouseMsg.left_up, cx, cy);
     expect(out, ui.game_ptr.started, "再开一局");
     _ = ui.testKey(0x72);
-    expect(out, !ui.game_ptr.started, "F2 应重开（回到未开局）");
-    out.writer().print("6 键盘 F2：通过\n", .{}) catch {};
+    expect(out, !ui.game_ptr.started, "F3 应重开（回到未开局）");
+    out.writer().print("6 键盘 F3：通过\n", .{}) catch {};
 
-// 7) 展开：判据不通过时不动棋盘
+    // 7) 展开：判据不通过时不动棋盘
     ui.testMouse(w.MouseMsg.left_down, cx, cy);
     ui.testMouse(w.MouseMsg.left_up, cx, cy);
     var target: i32 = -1;
@@ -439,7 +439,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             }
         }
 
-// 7.1 左右键同时点击：按住预览、松手展开
+        // 7.1 左右键同时点击：按住预览、松手展开
         {
             ui.testMouse(w.MouseMsg.left_down, tx, ty);
             expect(out, !ui.testFaceDown(), "按棋盘（准备翻格）不该播按下脸");
@@ -476,7 +476,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             out.writer().print("7 左右键同时展开：判据{s}，翻开 {d} → {d}\n", .{ if (passed) "通过" else "不通过", before_open, after_open }) catch {};
         }
 
-// 7.2 中键：同一套「按住预览、松手展开」
+        // 7.2 中键：同一套「按住预览、松手展开」
         if (!ui.game_ptr.over) {
             var before_open: u32 = 0;
             for (0..ui.game_ptr.n) |k| {
@@ -502,7 +502,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             out.writer().print("7 中键展开（松手才生效）：翻开 {d} → {d}\n", .{ before_open, after_open }) catch {};
         }
 
-// 7.3 双击不再是展开触发器
+        // 7.3 双击不再是展开触发器
         {
             var before_open: u32 = 0;
             for (0..ui.game_ptr.n) |k| {
@@ -519,9 +519,9 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }
     }
 
-// 7b) 判据通过时，两条路径都要真的翻开
+    // 7b) 判据通过时，两条路径都要真的翻开
     if (!ui.game_ptr.over) {
-// 7b.1 左右键同时点击
+        // 7b.1 左右键同时点击
         const t2: i32 = setupExpandable();
         if (t2 >= 0) {
             var before2: u32 = 0;
@@ -543,7 +543,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             expect(out, ui.game_ptr.msg == .expand_ok, "左右键同时展开成功应给出 expand_ok 枚举");
             out.writer().print("7b 左右键同时展开（判据通过）：翻开 {d} → {d}\n", .{ before2, after2 }) catch {};
         }
-// 7b.2 中键
+        // 7b.2 中键
         var t3: i32 = -1;
         if (!ui.game_ptr.over) t3 = setupExpandable();
         if (t3 >= 0) {
@@ -564,7 +564,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }
     }
 
-// 8) 版式：棋盘完整落在客户区内
+    // 8) 版式：棋盘完整落在客户区内
     {
         const L2 = ui.testLayout();
         expect(out, L2.board_x >= L2.frame and L2.board_y >= L2.header_y + L2.header_h, "棋盘不能在框外");
@@ -573,12 +573,11 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("8 版式边界：通过\n", .{}) catch {};
     }
 
-// 9) 自定义雷区对话框：校验与生效
+    // 9) 自定义雷区对话框：校验与生效
     {
         expect(out, ui.testOpenDialog(), "自定义对话框应能创建");
-        expect(out, ui.testEditValue(0) == @as(i32, ui.game_ptr.h) and ui.testEditValue(1) == @as(i32, ui.game_ptr.w),
-            "对话框应预填当前尺寸");
-// 文案：四种雷的名字，「四种雷各自的颗数」那行已删
+        expect(out, ui.testEditValue(0) == @as(i32, ui.game_ptr.h) and ui.testEditValue(1) == @as(i32, ui.game_ptr.w), "对话框应预填当前尺寸");
+        // 文案：四种雷的名字，「四种雷各自的颗数」那行已删
         {
             var tb2: [2048]u8 = undefined;
             const labels = u16ToUtf8(&tb2, ui.testDialogTexts());
@@ -587,9 +586,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             expect(out, std.mem.indexOf(u8, labels, "正虚雷") != null, "对话框应有「正虚雷」");
             expect(out, std.mem.indexOf(u8, labels, "负虚雷") != null, "对话框应有「负虚雷」");
             expect(out, std.mem.indexOf(u8, labels, "各自的颗数") == null, "「四种雷各自的颗数」那行应删掉");
-            expect(out, std.mem.indexOf(u8, labels, "+1 正实") == null and std.mem.indexOf(u8, labels, "−1 负实") == null,
-                "标签里不该再带 +1/−1 前缀");
-// 白底：静态标签必须拿到那块白刷子
+            expect(out, std.mem.indexOf(u8, labels, "+1 正实") == null and std.mem.indexOf(u8, labels, "−1 负实") == null, "标签里不该再带 +1/−1 前缀");
+            // 白底：静态标签必须拿到那块白刷子
             expect(out, ui.testDialogBgBrushIsWhite(), "静态标签的背景应是白色刷子");
             out.writer().print("9 对话框文案与白底：{s}\n", .{labels}) catch {};
         }
@@ -642,7 +640,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("9 自定义对话框：校验/均分/生效 通过\n", .{}) catch {};
     }
 
-// 10) 整局通关：胜利脸 + 结束后不再响应
+    // 10) 整局通关：胜利脸 + 结束后不再响应
     {
         ui.testCommand(ui.test_IDM_BEGINNER);
         const L4 = ui.testLayout();
@@ -677,7 +675,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("10 整局通关：胜利脸 + 全部翻开 + 结束后不响应 通过\n", .{}) catch {};
     }
 
-// 11) 踩雷结算：死亡脸 + 记录踩中格
+    // 11) 踩雷结算：死亡脸 + 记录踩中格
     {
         ui.testCommand(ui.test_IDM_BEGINNER);
         const L5 = ui.testLayout();
@@ -722,7 +720,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }
         out.writer().print("11 踩雷结算：死亡脸 + 记录踩中格 + 结束后不响应 通过\n", .{}) catch {};
 
-// 11b) 结束后按人脸重开
+        // 11b) 结束后按人脸重开
         {
             const fpx = ui.testFaceX() + 13 * L.z;
             const fpy = ui.testFaceY() + 13 * L.z;
@@ -735,9 +733,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }
     }
 
-
-
-// 12) 最高分纪录：记账 / 不覆盖 / 自定义不计入
+    // 12) 最高分纪录：记账 / 不覆盖 / 自定义不计入
     {
         ui.testScoresStopPersist();
         ui.testSetScores(0, 0, 0);
@@ -776,11 +772,10 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         const cy7 = L7.board_y + 6 * L7.cell + @divTrunc(L7.cell, 2);
         clearBoard(out, cx7, cy7, 5_000);
         expect(out, ui.game_ptr.win, "自定义盘也应能通关");
-        expect(out, ui.testGetScore(0) == 7 and ui.testGetScore(1) == 8 and ui.testGetScore(2) == 9,
-            "自定义棋盘不应写入任何纪录");
+        expect(out, ui.testGetScore(0) == 7 and ui.testGetScore(1) == 8 and ui.testGetScore(2) == 9, "自定义棋盘不应写入任何纪录");
         out.writer().print("12 最高分纪录：记账/不覆盖/自定义不计入 通过\n", .{}) catch {};
 
-// 12.5 纪录窗正文：只有三行
+        // 12.5 纪录窗正文：只有三行
         ui.testSetScores(12, 0, 340);
         var tb: [512]u8 = undefined;
         const s = u16ToUtf8(&tb, ui.testScoresText());
@@ -798,9 +793,9 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("12.5 纪录窗正文：\n{s}", .{s}) catch {};
     }
 
-// 13) 音效：六段内嵌 / tick 每整秒一下 / 四种踩雷按型 / 通关音
+    // 13) 音效：六段内嵌 / tick 每整秒一下 / 四种踩雷按型 / 通关音
     {
-// 13a 内嵌素材：六段都在、都是标准 wav、四种踩雷音各不相同
+        // 13a 内嵌素材：六段都在、都是标准 wav、四种踩雷音各不相同
         var all_riff = true;
         var all_big = true;
         for (0..6) |i| {
@@ -811,12 +806,10 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, all_big, "六段音效都不该是空壳");
         expect(out, ui.testArgCount() > 0, "自检进程应当带着开关启动");
         expect(out, ui.testSoundMuted(), "非交互模式（自检/抓图/导出）应当静音");
-        expect(out,
-            !ui.testSoundsEqual(0, 1) and !ui.testSoundsEqual(0, 2) and !ui.testSoundsEqual(0, 3) and
-            !ui.testSoundsEqual(1, 2) and !ui.testSoundsEqual(1, 3) and !ui.testSoundsEqual(2, 3),
-            "四种踩雷音必须各不相同（不能四种雷一个声）");
+        expect(out, !ui.testSoundsEqual(0, 1) and !ui.testSoundsEqual(0, 2) and !ui.testSoundsEqual(0, 3) and
+            !ui.testSoundsEqual(1, 2) and !ui.testSoundsEqual(1, 3) and !ui.testSoundsEqual(2, 3), "四种踩雷音必须各不相同（不能四种雷一个声）");
 
-// 13b 计时：第 0 秒不响，从第 1 秒起每整秒一下，同秒不重复
+        // 13b 计时：第 0 秒不响，从第 1 秒起每整秒一下，同秒不重复
         ui.testSoundReset();
         ui.testCommand(ui.test_IDM_BEGINNER);
         const Ls = ui.testLayout();
@@ -841,7 +834,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, ui.testSoundCount(5) == 3, "一次跳过好几秒也只补一下，不该连着炸一串");
         expect(out, ui.testSoundCount(4) == 0, "还没通关，不该播胜利音");
 
-// 13c 踩雷：四种雷各踩一次，播各自那一段
+        // 13c 踩雷：四种雷各踩一次，播各自那一段
         var t: u8 = 1;
         while (t <= 4) : (t += 1) {
             ui.testSoundReset();
@@ -874,7 +867,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             expect(out, others == 0, "踩雷时不该同时播别的声音");
         }
 
-// 13d 通关：只播胜利音
+        // 13d 通关：只播胜利音
         ui.testSoundReset();
         ui.testCommand(ui.test_IDM_BEGINNER);
         const Lw = ui.testLayout();
@@ -889,9 +882,9 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("13 音效：六段内嵌 / tick 每整秒一下 / 四种踩雷按型 / 通关胜利音 通过\n", .{}) catch {};
     }
 
-// 14) 闵可夫斯基模式：菜单结构 / 圆点 / 标题 / j 单位 / 贴图分派 / 帮助窗口两个选项卡
+    // 14) 闵可夫斯基模式：菜单结构 / 圆点 / 标题 / j 单位 / 贴图分派 / 帮助窗口两个选项卡
     {
-// 14a 菜单结构：游戏菜单 = 开局、分隔线、圆复数模式▸、闵可夫斯基模式▸、分隔线、纪录、分隔线、三个缩放、分隔线、退出
+        // 14a 菜单结构：游戏菜单 = 开局、分隔线、圆复数模式▸、闵可夫斯基模式▸、分隔线、纪录、分隔线、三个缩放、分隔线、退出
         expect(out, ui.testPopupItemId(0, 0) == @as(i32, @intCast(ui.test_IDM_NEW)), "游戏菜单第一项应是开局");
         expect(out, ui.testPopupItemId(0, 1) == 0, "游戏菜单第二项应是分隔线（ID 0）");
         expect(out, ui.testPopupCount(0) == 12, "游戏菜单顶层应是 12 项（开局/分隔线/两个模式/分隔线/颜色/声音/三个缩放/分隔线/退出）");
@@ -912,7 +905,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, ui.testMenuHasId(ui.test_IDM_HYPER_BEGINNER), "菜单树里应能找到闵可夫斯基初级");
         expect(out, ui.testMenuHasId(ui.test_IDM_HYPER_CUSTOM), "菜单树里应能找到闵可夫斯基自定义");
 
-// 14b 切到闵可夫斯基模式初级：模式、棋盘、档位、标题、圆点、j 单位格
+        // 14b 切到闵可夫斯基模式初级：模式、棋盘、档位、标题、圆点、j 单位格
         ui.testCommand(ui.test_IDM_HYPER_BEGINNER);
         expect(out, ui.testIsHyper(), "应切到闵可夫斯基模式");
         expect(out, ui.game_ptr.mode == .hyper, "游戏状态里的模式也该跟着切");
@@ -930,7 +923,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, ui.testUnitSprite() != ui.testLedISprite, "闵可夫斯基模式不该再用 i 那一格");
         out.writer().print("14 闵可夫斯基模式：菜单结构 / 圆点 / 标题 / j 单位 通过\n", .{}) catch {};
 
-// 14c 显示值分派：手搓一个 5×5 闵可夫斯基局面，核对 D → 贴图（负数走 hnum_*_i）
+        // 14c 显示值分派：手搓一个 5×5 闵可夫斯基局面，核对 D → 贴图（负数走 hnum_*_i）
         {
             const gm = ui.game_ptr;
             gm.w = 5;
@@ -967,7 +960,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             out.writer().print("14c 闵可夫斯基贴图分派：−3→√3i / +1→1 / −4→2i / 0 与空白分开 通过\n", .{}) catch {};
         }
 
-// 14d 玩法与操作：一篇文案讲两个模式（不再是选项卡窗口）
+        // 14d 玩法与操作：一篇文案讲两个模式（不再是选项卡窗口）
         {
             var hb: [3072]u8 = undefined;
             const help = u16ToUtf8(&hb, std.mem.span(ui.testHelpText));
@@ -981,7 +974,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             expect(out, std.mem.indexOf(u8, help, "定义双曲虚数单位（类时单位）j²=1") != null, "闵可夫斯基模式要写明「定义类时单位j²=1」");
             out.writer().print("14d 玩法与操作：一篇文案含两个模式的规则 通过\n", .{}) catch {};
         }
-// 14e 纪录分模式 + 闵可夫斯基局照样记账
+        // 14e 纪录分模式 + 闵可夫斯基局照样记账
         {
             expect(out, ui.testScoreKeysDiffer(), "两个模式应各记一套纪录（键名不同）");
             ui.testSetScores(0, 0, 0);
@@ -996,7 +989,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }
     }
 
-// 14f 自定义雷区的雷名随模式：闵可夫斯基模式下写「类空雷 / 类时雷」，圆复数模式写「实雷 / 虚雷」
+    // 14f 自定义雷区的雷名随模式：闵可夫斯基模式下写「类空雷 / 类时雷」，圆复数模式写「实雷 / 虚雷」
     {
         ui.testCommand(ui.test_IDM_HYPER_BEGINNER);
         expect(out, ui.testOpenDialog(), "闵可夫斯基模式下自定义对话框应能打开");
@@ -1007,7 +1000,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, std.mem.indexOf(u8, labels, "正双曲虚雷（正类时雷）") != null, "闵可夫斯基模式下应写全名「正双曲虚雷（正类时雷）」");
         expect(out, std.mem.indexOf(u8, labels, "负双曲虚雷（负类时雷）") != null, "闵可夫斯基模式下应写全名「负双曲虚雷（负类时雷）」");
         ui.testCloseDialog();
-        ui.testCommand(ui.test_IDM_BEGINNER);   // 回到圆复数模式，别影响后面的组
+        ui.testCommand(ui.test_IDM_BEGINNER); // 回到圆复数模式，别影响后面的组
         expect(out, ui.testOpenDialog(), "圆复数模式下自定义对话框也应能打开");
         var lb2: [1024]u8 = undefined;
         const labels2 = u16ToUtf8(&lb2, ui.testDialogTexts());
@@ -1019,7 +1012,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("14f 自定义雷区：雷名随模式（实雷·虚雷 / 类空雷·类时雷）通过\n", .{}) catch {};
     }
 
-// 15) 失败/胜利后的判定贴图：标错雷 / 标错空格子 / 标对雷 / 标对旗 / 标错旗
+    // 15) 失败/胜利后的判定贴图：标错雷 / 标错空格子 / 标对雷 / 标对旗 / 标错旗
     {
         const gm = ui.game_ptr;
         const S = ui.SpriteFamily;
@@ -1030,7 +1023,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
                 g2.w = 5;
                 g2.h = 5;
                 g2.n = 25;
-                g2.mode = .complex;    // 别受前面几组留下的模式影响
+                g2.mode = .complex; // 别受前面几组留下的模式影响
                 g2.started = true;
                 g2.over = false;
                 g2.win = false;
@@ -1045,17 +1038,17 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }.go;
         setup(gm);
         _ = gm.nbrs(12, &nbuf);
-        gm.mine[nbuf[0]] = 3;   // 正虚雷（闵可夫斯基模式下就是正类时雷）
-        gm.mine[nbuf[1]] = 1;   // 正实雷
-        gm.mine[nbuf[2]] = 2;   // 负实雷
+        gm.mine[nbuf[0]] = 3; // 正虚雷（闵可夫斯基模式下就是正类时雷）
+        gm.mine[nbuf[1]] = 1; // 正实雷
+        gm.mine[nbuf[2]] = 2; // 负实雷
         gm.computeClues();
 
-// 15a 失败局面
+        // 15a 失败局面
         gm.over = true;
         gm.win = false;
-        _ = gm.setFlag(nbuf[0], 1);           // 正虚雷插成了正实旗 → 标错雷，按真实雷型（3）出图
-        _ = gm.setFlag(nbuf[1], 1);           // 正实雷插对了 → 标对雷
-        _ = gm.setFlag(nbuf[3], 4);           // 空格子插了旗 → 标错空格子
+        _ = gm.setFlag(nbuf[0], 1); // 正虚雷插成了正实旗 → 标错雷，按真实雷型（3）出图
+        _ = gm.setFlag(nbuf[1], 1); // 正实雷插对了 → 标对雷
+        _ = gm.setFlag(nbuf[3], 4); // 空格子插了旗 → 标错空格子
         expect(out, ui.testCellSprite(nbuf[0]) == ui.testSprite(S.wrong, false, 3), "失败：旗插错要贴「标错+真实雷型」那张，不是玩家插错的那型");
         expect(out, ui.testCellSprite(nbuf[0]) != ui.testSprite(S.wrong, false, 1), "失败：标错雷不能按玩家插错的旗型选图");
         expect(out, ui.testCellSprite(nbuf[1]) == ui.testSprite(S.right, false, 1), "失败：插对了要贴「标对正实雷」");
@@ -1063,7 +1056,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, ui.testCellSprite(nbuf[2]) == ui.testSprite(S.mine, false, 2), "失败：没插旗的雷照旧显示雷本身");
         expect(out, ui.testSprite(S.mine, false, 2) != ui.testSprite(S.right, false, 2), "标对雷与雷本身不能是同一张");
 
-// 15b 胜利局面（胜利时所有非雷格都已翻开，所以旗只会在雷上）
+        // 15b 胜利局面（胜利时所有非雷格都已翻开，所以旗只会在雷上）
         setup(gm);
         _ = gm.nbrs(12, &nbuf);
         gm.mine[nbuf[0]] = 3;
@@ -1072,14 +1065,14 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         gm.computeClues();
         gm.over = true;
         gm.win = true;
-        _ = gm.setFlag(nbuf[0], 3);           // 插对了 → 标对旗
-        _ = gm.setFlag(nbuf[2], 1);           // 插错了 → 标错旗（按真实雷型 2）
+        _ = gm.setFlag(nbuf[0], 3); // 插对了 → 标对旗
+        _ = gm.setFlag(nbuf[2], 1); // 插错了 → 标错旗（按真实雷型 2）
         expect(out, ui.testCellSprite(nbuf[0]) == ui.testSprite(S.rightflag, false, 3), "胜利：插对了要贴「标对正虚旗」");
         expect(out, ui.testCellSprite(nbuf[2]) == ui.testSprite(S.wrongflag, false, 2), "胜利：插错了要贴「标错+真实雷型」那张");
         expect(out, ui.testCellSprite(nbuf[2]) != ui.testSprite(S.wrongflag, false, 1), "胜利：标错旗也不能按玩家插错的旗型选图");
         expect(out, ui.testCellSprite(nbuf[1]) == ui.testClosedSprite, "胜利：没插旗的雷不该翻开（还是闭格）");
 
-// 15c 闵可夫斯基模式：3/4 两种雷换成 j 系列贴图
+        // 15c 闵可夫斯基模式：3/4 两种雷换成 j 系列贴图
         gm.mode = .hyper;
         expect(out, ui.testSprite(S.mine, true, 1) == ui.testSprite(S.mine, false, 1), "闵可夫斯基模式的实雷与圆复数模式共用贴图");
         expect(out, ui.testSprite(S.mine, true, 3) != ui.testSprite(S.mine, false, 3), "闵可夫斯基模式的闵可夫斯基雷要换成它自己的贴图");
@@ -1106,7 +1099,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("15 判定贴图：标错雷/标错空格子/标对雷/标对旗/标错旗 + 闵可夫斯基 j 系列 通过\n", .{}) catch {};
     }
 
-// 16) 声音开关：菜单里一行，点一下翻转，圆点跟着翻转
+    // 16) 声音开关：菜单里一行，点一下翻转，圆点跟着翻转
     {
         // 游戏菜单顶层：开局/分隔线/两个模式/分隔线/声音/三个缩放/分隔线/退出
         expect(out, ui.testPopupCount(0) == 12, "游戏菜单顶层应是 12 项（多出「颜色」「声音」两行）");
@@ -1127,7 +1120,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         out.writer().print("16 声音开关：点一下翻转（圆点跟着翻转）/ 再点还原 通过\n", .{}) catch {};
     }
 
-// 17) 颜色开关：勾选态 = 彩色贴图；关掉改用黑白贴图（菜单圆点与图集一起翻）
+    // 17) 颜色开关：勾选态 = 彩色贴图；关掉改用黑白贴图（菜单圆点与图集一起翻）
     {
         expect(out, ui.testPopupItemId(0, 5) == @as(i32, @intCast(ui.test_IDM_COLOR)), "第 6 项应是「颜色」");
         expect(out, ui.testBwAtlasLoaded(), "黑白图集应加载成功（由 素材/图集黑白.png 生成的灰度图）");

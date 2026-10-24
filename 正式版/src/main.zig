@@ -664,8 +664,8 @@ fn cellSprite(i: usize) u16 {
         return if (s == 0xFFFF) A.blank else s;
     }
     if (game.flag[i] != 0) {
-        const t = game.mine[i];                  // 0 = 这里其实不是雷
-        const f = game.flag[i];                  // 玩家插的旗的类型
+        const t = game.mine[i]; // 0 = 这里其实不是雷
+        const f = game.flag[i]; // 玩家插的旗的类型
         if (revealed) {
             // 失败后的复盘：给空格子插了旗 → 标错空格子；插错了 → 标错雷（按真实雷型）；
             // 插对了 → 标对雷（让玩家看见自己判断对的地方）
@@ -1016,7 +1016,7 @@ fn createCustomWindow() bool {
     // 标签长得多，所以四种雷改成一行一种竖着排，编辑框统一右移到 x=196。
     const names = if (hyper())
         [4][*:0]const u16{
-            w.wstr("正实雷（正类空雷）："), w.wstr("负实雷（负类空雷）："),
+            w.wstr("正实雷（正类空雷）："),       w.wstr("负实雷（负类空雷）："),
             w.wstr("正双曲虚雷（正类时雷）："), w.wstr("负双曲虚雷（负类时雷）："),
         }
     else
@@ -1244,7 +1244,7 @@ fn mainWndProc(hwnd: w.HWND, msg: w.UINT, wp: w.WPARAM, lp: w.LPARAM) callconv(.
             const dc: w.HDC = @ptrFromInt(wp);
             const flags: usize = @bitCast(lp);
             if (dc != null and (flags & 0x04) != 0) paint(dc, layout()); // PRF_CLIENT
-            return w.DefWindowProcW(hwnd, msg, wp, lp);                  // 标题栏/菜单由系统画
+            return w.DefWindowProcW(hwnd, msg, wp, lp); // 标题栏/菜单由系统画
         },
         w.WM.PRINTCLIENT => {
             const dc: w.HDC = @ptrFromInt(wp);
@@ -1300,7 +1300,7 @@ fn onCommand(hwnd: w.HWND, id: usize) w.LRESULT {
 }
 
 fn onKeyDown(vk: w.WPARAM) w.LRESULT {
-    if (vk == 0x72) { // F2
+    if (vk == 0x72) { // F3
         startNewGame(null);
         return 0;
     }
@@ -1567,7 +1567,7 @@ fn showAbout() void {
 /// 文案由作者定稿，改的时候连分行一起改——弹窗里一行就是这里一行。
 const HELP_TEXT = "雷区里有四种雷。\r\n" ++
     "鼠标左键翻开格子，右键插旗，中键或左右键同时点击展开格子。\r\n" ++
-    "点击人脸或者按F2 开局。\r\n" ++
+    "点击人脸或者按F3 开局。\r\n" ++
     "\r\n" ++
     "圆复数模式：\r\n" ++
     "四种雷分别是正实雷、负实雷、正虚雷、负虚雷。\r\n" ++
@@ -1849,7 +1849,6 @@ fn saveBmp(path: []const u8, pixels: [*]u8, cw: i32, ch: i32) bool {
     return true;
 }
 
-
 // ------------------------------------------------------------------ 入口
 var shot_path_buf: [260]u8 = undefined;
 var shot_path_len: usize = 0;
@@ -1884,7 +1883,6 @@ fn dumpPath() ?[]const u8 {
 }
 
 /// 把当前局面写成文本，用于核对计数器数值等方法：--dump out.txt
-
 fn parseArgs() void {
     var it = std.process.argsWithAllocator(std.heap.page_allocator) catch return;
     defer it.deinit();
@@ -2398,8 +2396,8 @@ fn dumpState(path: []const u8) void {
     s.writer().print("unmarked    = {d} {d} {d} {d}\n", .{ game.unmarked(1), game.unmarked(2), game.unmarked(3), game.unmarked(4) }) catch {};
     s.writer().print("counterValue= {d} {d} {d} {d}\n", .{ counterValue(1), counterValue(2), counterValue(3), counterValue(4) }) catch {};
     s.writer().print("panelCells  = {d} {d} {d} {d}   timer={d}\n", .{
-        panelCells(false, counterShown(1)), panelCells(true, counterShown(2)),
-        panelCells(true,  counterShown(3)), panelCells(true, counterShown(4)),
+        panelCells(false, counterShown(1)),                            panelCells(true, counterShown(2)),
+        panelCells(true, counterShown(3)),                             panelCells(true, counterShown(4)),
         panelCells(false, if (game.started) timerSeconds() else null),
     }) catch {};
     s.writer().print("started={} over={} win={} elapsed_ms={d}\n", .{ game.started, game.over, game.win, game.elapsed_ms }) catch {};
@@ -2844,5 +2842,3 @@ pub fn testScoresText() []const u16 {
 pub fn testBackdate(ms: u32) void {
     game.t0 = nowMs() -% ms;
 }
-
-

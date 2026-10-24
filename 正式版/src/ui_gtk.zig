@@ -401,6 +401,9 @@ const GtkMenu = opaque {};
 const GtkMenuShell = opaque {};
 const GtkMenuItem = opaque {};
 const GtkCheckMenuItem = opaque {};
+const GtkDialog = opaque {};
+const GtkLabel = opaque {};
+const GtkImage = opaque {};
 const cairo_t = opaque {};
 const cairo_surface_t = opaque {};
 
@@ -412,6 +415,10 @@ const GDK_BUTTON_RELEASE_MASK: c_int = 0x200;
 const GDK_POINTER_MOTION_MASK: c_int = 0x40;
 const GDK_KEY_PRESS_MASK: c_int = 0x400;
 const GTK_ORIENTATION_VERTICAL: c_int = 1;
+const GTK_ORIENTATION_HORIZONTAL: c_int = 0;
+const GTK_RESPONSE_OK: c_int = -5;
+const GTK_JUSTIFY_LEFT: c_int = 0;
+const GTK_ICON_SIZE_DIALOG: c_int = 6;
 
 // GDK 事件结构：只声明到我们要读的字段，偏移按 x86_64 GTK3 ABI 自然对齐
 const GdkEventButton = extern struct {
@@ -491,6 +498,17 @@ pub extern "gtk-3" fn gtk_menu_item_set_submenu(item: ?*GtkMenuItem, submenu: ?*
 pub extern "gtk-3" fn gtk_menu_shell_append(shell: ?*GtkMenuShell, item: ?*GtkWidget) callconv(.c) void;
 pub extern "gtk-3" fn gtk_check_menu_item_set_active(item: ?*GtkCheckMenuItem, active: c_int) callconv(.c) void;
 pub extern "gtk-3" fn gtk_check_menu_item_set_draw_as_radio(item: ?*GtkCheckMenuItem, draw_as_radio: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_dialog_new() callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_dialog_run(d: ?*GtkDialog) callconv(.c) c_int;
+pub extern "gtk-3" fn gtk_dialog_add_button(d: ?*GtkDialog, text: [*:0]const u8, response_id: c_int) callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_dialog_get_content_area(d: ?*GtkDialog) callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_window_set_modal(w: ?*GtkWindow, modal: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_window_set_transient_for(w: ?*GtkWindow, parent: ?*GtkWindow) callconv(.c) void;
+pub extern "gtk-3" fn gtk_label_new(s: [*:0]const u8) callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_label_set_xalign(l: ?*GtkLabel, x: f32) callconv(.c) void;
+pub extern "gtk-3" fn gtk_label_set_justify(l: ?*GtkLabel, j: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_label_set_selectable(l: ?*GtkLabel, s: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_image_new_from_icon_name(icon_name: [*:0]const u8, size: c_int) callconv(.c) ?*GtkWidget;
 
 // ------------------------------------------------------------------ 内部运行时结构
 // ------------------------------------------------------------------ 内部运行时结构
@@ -1713,16 +1731,83 @@ pub fn CreateFontW(h: i32, w: i32, e: i32, o: i32, wt: i32, it: DWORD, u: DWORD,
 }
 
 // ------------------------------------------------------------------ 消息框 / 音频 / 抓图
+// 消息框：Win32 的 MessageBoxW / MessageBoxIndirectW 落到 GTK 模态对话框。
+// 用非变参 API 手搭（gtk_dialog_new + gtk_label_new + gtk_dialog_run），免得为变参的
+// gtk_message_dialog_new 引入 @cImport。图标按 warning/info 二选一；lpszIcon 的自定义
+// 图标在 Linux 侧没有 .rsrc，回退到标准信息图标。
+const MB_TEXT_MAX: usize = 8192;
+
+fn wstrCount(s: LPCWSTR) usize {
+    const p = s orelse return 0;
+    var n: usize = 0;
+    while (p[n] != 0) n += 1;
+    return n;
+}
+
+/// 宽串 → UTF-8，并把 Win32 的 \r\n 折成 GTK 标签认识的 \n（孤 \r 也算换行）。
+/// 结尾补 0，返回以 0 结尾的切片（缓冲写满则截断）。
+fn wideToMsgUtf8(buf: []u8, s: LPCWSTR) [:0]const u8 {
+    const p = s orelse return buf[0..0 :0];
+    const n = wstrCount(p);
+    var tmp: [MB_TEXT_MAX]u8 = undefined;
+    const n8 = std.unicode.utf16LeToUtf8(&tmp, p[0..n]) catch return buf[0..0 :0];
+    const utf8 = tmp[0..n8];
+    var o: usize = 0;
+    var i: usize = 0;
+    while (i < utf8.len and o + 1 < buf.len) {
+        if (utf8[i] == '\r') {
+            i += 1;
+            if (i < utf8.len and utf8[i] == '\n') i += 1;
+            buf[o] = '\n';
+        } else {
+            buf[o] = utf8[i];
+            i += 1;
+        }
+        o += 1;
+    }
+    buf[o] = 0;
+    return buf[0..o :0];
+}
+
+fn gtkMessageBox(owner: HWND, text: LPCWSTR, caption: LPCWSTR, style: UINT) i32 {
+    ensureGtk();
+    var text_buf: [MB_TEXT_MAX]u8 = undefined;
+    var cap_buf: [512]u8 = undefined;
+    const text_z = wideToMsgUtf8(&text_buf, text);
+    const cap_z = wideToMsgUtf8(&cap_buf, caption);
+
+    const dlg_w = gtk_dialog_new() orelse return 0;
+    gtk_window_set_title(@ptrCast(dlg_w), cap_z.ptr);
+    if (asWindow(owner)) |ow| {
+        if (ow.gtk_win) |gw| gtk_window_set_transient_for(@ptrCast(dlg_w), @ptrCast(gw));
+    }
+    gtk_window_set_modal(@ptrCast(dlg_w), 1);
+
+    const content = gtk_dialog_get_content_area(@ptrCast(dlg_w)); // ?*GtkWidget，其实是 GtkBox
+    const row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12) orelse return 0;
+    const icon_name: [*:0]const u8 = if ((style & MB.ICONWARNING) != 0) "dialog-warning" else "dialog-information";
+    if (gtk_image_new_from_icon_name(icon_name, GTK_ICON_SIZE_DIALOG)) |img| {
+        gtk_box_pack_start(@ptrCast(row), img, 0, 0, 0);
+    }
+    const lbl = gtk_label_new(text_z.ptr) orelse return 0;
+    gtk_label_set_selectable(@ptrCast(lbl), 1);
+    gtk_label_set_xalign(@ptrCast(lbl), 0.0);
+    gtk_label_set_justify(@ptrCast(lbl), GTK_JUSTIFY_LEFT);
+    gtk_box_pack_start(@ptrCast(row), lbl, 1, 1, 0);
+    gtk_box_pack_start(@ptrCast(content), row, 1, 1, 12);
+    _ = gtk_dialog_add_button(@ptrCast(dlg_w), "确定", GTK_RESPONSE_OK);
+
+    gtk_widget_show_all(dlg_w);
+    _ = gtk_dialog_run(@ptrCast(dlg_w));
+    gtk_widget_destroy(dlg_w);
+    return 1; // IDOK
+}
+
 pub fn MessageBoxW(hwnd: HWND, text: LPCWSTR, caption: LPCWSTR, kind: UINT) i32 {
-    _ = hwnd;
-    _ = text;
-    _ = caption;
-    _ = kind;
-    return 1; // IDOK；真实 GTK 对话框接在 Phase 5
+    return gtkMessageBox(hwnd, text, caption, kind);
 }
 pub fn MessageBoxIndirectW(p: *const MSGBOXPARAMS) i32 {
-    _ = p;
-    return 1;
+    return gtkMessageBox(p.hwndOwner, p.lpszText, p.lpszCaption, p.dwStyle);
 }
 // ------------------------------------------------------------------ 音频（SDL2_mixer）
 // Win32 的 PlaySoundW(SND_MEMORY | SND_ASYNC) 在这里落到 SDL2_mixer：把内存里整段
@@ -1822,15 +1907,133 @@ pub fn PrintWindow(hwnd: HWND, dc: HDC, flags: UINT) BOOL {
 }
 
 // ------------------------------------------------------------------ 持久化
-// Linux 侧把 HKCU 注册表换成「零副作用」实现：open/create 一律返回失败（走默认值，
-// 不 load 也不 save）。真正的文件持久化（~/.config/complexweeper/registry.ini）留到 Phase 5。
+// Windows 版把纪录/声音/颜色偏好写在 HKCU\Software\Complexweeper 的 DWORD 值里。
+// Linux 没有注册表，换一个文件做等价物：整条键映射到
+//   $XDG_CONFIG_HOME/complexweeper/registry.conf（回退 ~/.config/complexweeper/registry.conf）
+// 格式一行一条 name=value（value 为十进制 DWORD）。open/create 读入内存、set 改内存并标记脏、
+// close 时若脏才整表写回——这样同表里「Sound 与三档纪录」这些键能共存不互相覆盖，
+// 而且只在真改过时落盘（测试模式走 scores_persist 开关，根本不进这里）。
+const REG_MAX_VALUE: usize = 16;
+const REG_MAX_NAME: usize = 64;
+const REG_PATH_MAX: usize = 512;
+
+const RegValue = struct {
+    name: [REG_MAX_NAME]u8 = [_]u8{0} ** REG_MAX_NAME,
+    name_len: usize = 0,
+    kind: u32 = REG_DWORD,
+    value: u32 = 0,
+};
+
+const RegKey = struct {
+    values: [REG_MAX_VALUE]RegValue = [_]RegValue{.{}} ** REG_MAX_VALUE,
+    count: usize = 0,
+    dirty: bool = false,
+    path: [REG_PATH_MAX]u8 = [_]u8{0} ** REG_PATH_MAX,
+    path_len: usize = 0,
+};
+
+inline fn asRegKey(key: usize) ?*RegKey {
+    if (key == 0) return null;
+    const k: *RegKey = @ptrFromInt(key);
+    return k;
+}
+
+fn regFind(k: *RegKey, name: []const u8) ?*RegValue {
+    for (k.values[0..k.count]) |*v| {
+        if (v.name_len == name.len and std.mem.eql(u8, v.name[0..v.name_len], name)) return v;
+    }
+    return null;
+}
+
+/// 拼出配置文件完整路径；写不下或拿不到 HOME 时返回 null（这一跑就退化为不持久化）。
+fn regFilePath(buf: []u8) ?[]u8 {
+    var dir: [REG_PATH_MAX]u8 = undefined;
+    var dlen: usize = 0;
+    if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| {
+        if (xdg.len != 0 and xdg.len < dir.len) {
+            @memcpy(dir[0..xdg.len], xdg);
+            dlen = xdg.len;
+        }
+    }
+    if (dlen == 0) {
+        const home = std.posix.getenv("HOME") orelse return null;
+        if (home.len == 0) return null;
+        const suffix = "/.config";
+        const need = home.len + suffix.len;
+        if (need >= dir.len) return null;
+        @memcpy(dir[0..home.len], home);
+        @memcpy(dir[home.len..][0..suffix.len], suffix);
+        dlen = need;
+    }
+    const rest = "/complexweeper/registry.conf";
+    if (dlen + rest.len >= buf.len) return null;
+    @memcpy(buf[0..dlen], dir[0..dlen]);
+    @memcpy(buf[dlen..][0..rest.len], rest);
+    return buf[0 .. dlen + rest.len];
+}
+
+fn regOpenKey(out: *usize) i32 {
+    const k = page.create(RegKey) catch return 2;
+    k.* = .{};
+    if (regFilePath(k.path[0..])) |p| k.path_len = p.len;
+    regLoad(k);
+    out.* = @intFromPtr(k);
+    return 0;
+}
+
+fn regLoad(k: *RegKey) void {
+    if (k.path_len == 0) return;
+    const path = k.path[0..k.path_len];
+    const bytes = std.fs.cwd().readFileAlloc(page, path, 64 * 1024) catch return;
+    defer page.free(bytes);
+    var it = std.mem.splitScalar(u8, bytes, '\n');
+    while (it.next()) |raw| {
+        var line = raw;
+        if (line.len != 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+        const tr = std.mem.trim(u8, line, " \t");
+        if (tr.len == 0 or tr[0] == '#' or tr[0] == ';') continue;
+        const eq = std.mem.indexOfScalar(u8, tr, '=') orelse continue;
+        const name = std.mem.trim(u8, tr[0..eq], " \t");
+        const val = std.mem.trim(u8, tr[eq + 1 ..], " \t");
+        if (name.len == 0 or name.len >= REG_MAX_NAME) continue;
+        const parsed = std.fmt.parseInt(u32, val, 10) catch continue;
+        if (regFind(k, name)) |e| {
+            e.value = parsed;
+            e.kind = REG_DWORD;
+        } else if (k.count < REG_MAX_VALUE) {
+            const slot = &k.values[k.count];
+            slot.* = .{};
+            @memcpy(slot.name[0..name.len], name);
+            slot.name_len = name.len;
+            slot.value = parsed;
+            slot.kind = REG_DWORD;
+            k.count += 1;
+        }
+    }
+}
+
+fn regSave(k: *RegKey) void {
+    if (!k.dirty or k.path_len == 0) return;
+    const path = k.path[0..k.path_len];
+    if (std.fs.path.dirname(path)) |dir| {
+        if (dir.len != 0) std.fs.cwd().makePath(dir) catch return;
+    }
+    const f = std.fs.cwd().createFile(path, .{}) catch return;
+    defer f.close();
+    var line: [256]u8 = undefined;
+    for (k.values[0..k.count]) |*v| {
+        const name = v.name[0..v.name_len];
+        const s = std.fmt.bufPrint(&line, "{s}={d}\n", .{ name, v.value }) catch continue;
+        f.writeAll(s) catch return;
+    }
+}
+
 pub fn RegOpenKeyExW(hive: usize, sub: LPCWSTR, opt: u32, access: u32, out: *usize) callconv(.c) i32 {
     _ = hive;
     _ = sub;
     _ = opt;
     _ = access;
-    _ = out;
-    return 2; // ERROR_FILE_NOT_FOUND
+    return regOpenKey(out);
 }
 pub fn RegCreateKeyExW(hive: usize, sub: LPCWSTR, opt: u32, cls: LPCWSTR, disp: u32, access: u32, sec: ?*anyopaque, out: *usize, disp_out: ?*u32) callconv(.c) i32 {
     _ = hive;
@@ -1840,29 +2043,56 @@ pub fn RegCreateKeyExW(hive: usize, sub: LPCWSTR, opt: u32, cls: LPCWSTR, disp: 
     _ = disp;
     _ = access;
     _ = sec;
-    _ = out;
-    _ = disp_out;
-    return 2;
+    const rc = regOpenKey(out);
+    if (disp_out) |d| d.* = 2; // REG_OPENED_EXISTING_KEY（对齐 Win32 的行为观感）
+    return rc;
 }
 pub fn RegSetValueExW(key: usize, name: LPCWSTR, opt: u32, kind: u32, data: [*]const u8, len: u32) callconv(.c) i32 {
-    _ = key;
-    _ = name;
     _ = opt;
-    _ = kind;
-    _ = data;
-    _ = len;
+    const k = asRegKey(key) orelse return 2;
+    var name_buf: [REG_MAX_NAME]u8 = undefined;
+    const p = name orelse return 2;
+    const n = wstrCount(p);
+    if (n == 0) return 2;
+    const nz = wideToUtf8Z(&name_buf, p[0..n]);
+    const entry = regFind(k, nz) orelse blk: {
+        if (k.count >= REG_MAX_VALUE) return 2;
+        const slot = &k.values[k.count];
+        slot.name_len = @min(nz.len, REG_MAX_NAME - 1);
+        @memcpy(slot.name[0..slot.name_len], nz[0..slot.name_len]);
+        k.count += 1;
+        break :blk &k.values[k.count - 1];
+    };
+    entry.kind = kind;
+    entry.value = if (len >= 4)
+        @as(u32, data[0]) | (@as(u32, data[1]) << 8) | (@as(u32, data[2]) << 16) | (@as(u32, data[3]) << 24)
+    else
+        0;
+    k.dirty = true;
     return 0;
 }
 pub fn RegQueryValueExW(key: usize, name: LPCWSTR, kind: ?*u32, kind_out: ?*u32, data: ?[*]u8, len: ?*u32) callconv(.c) i32 {
-    _ = key;
-    _ = name;
     _ = kind;
-    _ = kind_out;
-    _ = data;
-    _ = len;
-    return 2;
+    const k = asRegKey(key) orelse return 2;
+    var name_buf: [REG_MAX_NAME]u8 = undefined;
+    const p = name orelse return 2;
+    const n = wstrCount(p);
+    if (n == 0) return 2;
+    const nz = wideToUtf8Z(&name_buf, p[0..n]);
+    const e = regFind(k, nz) orelse return 2;
+    if (kind_out) |ko| ko.* = e.kind;
+    if (data) |d| {
+        d[0] = @truncate(e.value);
+        d[1] = @truncate(e.value >> 8);
+        d[2] = @truncate(e.value >> 16);
+        d[3] = @truncate(e.value >> 24);
+    }
+    if (len) |l| l.* = 4;
+    return 0;
 }
 pub fn RegCloseKey(key: usize) callconv(.c) i32 {
-    _ = key;
+    const k = asRegKey(key) orelse return 0;
+    regSave(k);
+    page.destroy(k);
     return 0;
 }

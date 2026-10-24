@@ -424,6 +424,41 @@ pub fn asciiToW(buf: []u16, s: []const u8) [:0]u16 {
     return buf[0..n :0];
 }
 
+/// 运行时 UTF-8 → UTF-16（含 BMP 三字节与超过 BMP 的代理对），写入调用方缓冲区并补 0 结尾。
+/// 给可移植菜单模型里的 UTF-8 label 用；超出缓冲区时静默截断，绝不越界。
+pub fn utf8ToW(buf: []u16, s: []const u8) [:0]u16 {
+    var i: usize = 0;
+    var o: usize = 0;
+    while (i < s.len and o < buf.len - 1) {
+        const c = s[i];
+        if (c < 0x80) {
+            buf[o] = c;
+            i += 1;
+        } else if (c & 0xE0 == 0xC0) {
+            if (i + 1 >= s.len) break;
+            buf[o] = (@as(u16, c & 0x1F) << 6) | @as(u16, s[i + 1] & 0x3F);
+            i += 2;
+        } else if (c & 0xF0 == 0xE0) {
+            if (i + 2 >= s.len) break;
+            buf[o] = (@as(u16, c & 0x0F) << 12) | (@as(u16, s[i + 1] & 0x3F) << 6) | @as(u16, s[i + 2] & 0x3F);
+            i += 3;
+        } else {
+            if (i + 3 >= s.len) break;
+            const cp: u21 = (@as(u21, c & 0x07) << 18) | (@as(u21, s[i + 1] & 0x3F) << 12) |
+                (@as(u21, s[i + 2] & 0x3F) << 6) | @as(u21, s[i + 3] & 0x3F);
+            const v = cp - 0x10000;
+            buf[o] = @intCast(0xD800 + (v >> 10));
+            o += 1;
+            if (o >= buf.len - 1) break;
+            buf[o] = @intCast(0xDC00 + (v & 0x3FF));
+            i += 4;
+        }
+        o += 1;
+    }
+    buf[o] = 0;
+    return buf[0..o :0];
+}
+
 pub fn u32ToW(buf: []u16, v: u32) [:0]u16 {
     var tmp: [12]u8 = undefined;
     const s = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch return buf[0..0 :0];

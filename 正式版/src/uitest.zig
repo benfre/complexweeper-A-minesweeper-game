@@ -1,6 +1,6 @@
 // 界面层自检：给窗口过程投递菜单/鼠标/键盘消息，验证 输入 → 状态 → 布局
 const std = @import("std");
-const w = @import("win32.zig");
+const w = @import("ui.zig");
 const g = @import("game.zig");
 const ui = @import("main.zig");
 
@@ -18,8 +18,8 @@ fn expect(out: *std.ArrayList(u8), cond: bool, name: []const u8) void {
 /// 辅助：开局 → 回拨时间 → 点开所有非雷格
 fn clearBoard(out: *std.ArrayList(u8), bx: i32, by: i32, backdate_ms: u32) void {
     _ = out;
-    ui.testMouse(w.WM.LBUTTONDOWN, bx, by);
-    ui.testMouse(w.WM.LBUTTONUP, bx, by);
+    ui.testMouse(w.MouseMsg.left_down, bx, by);
+    ui.testMouse(w.MouseMsg.left_up, bx, by);
     ui.testBackdate(backdate_ms);
     var guard: u32 = 0;
     while (guard < 4) : (guard += 1) {
@@ -29,8 +29,8 @@ fn clearBoard(out: *std.ArrayList(u8), bx: i32, by: i32, backdate_ms: u32) void 
             const L = ui.testLayout();
             const mx = L.board_x + @as(i32, @intCast(k % ui.game_ptr.w)) * L.cell + @divTrunc(L.cell, 2);
             const my = L.board_y + @as(i32, @intCast(k / ui.game_ptr.w)) * L.cell + @divTrunc(L.cell, 2);
-            ui.testMouse(w.WM.LBUTTONDOWN, mx, my);
-            ui.testMouse(w.WM.LBUTTONUP, mx, my);
+            ui.testMouse(w.MouseMsg.left_down, mx, my);
+            ui.testMouse(w.MouseMsg.left_up, mx, my);
             if (ui.game_ptr.over) return;
             done = false;
         }
@@ -62,13 +62,13 @@ fn setupExpandable() i32 {
 
 /// 辅助：右键点一下
 fn rightClick(x: i32, y: i32) void {
-    ui.testMouse(w.WM.RBUTTONDOWN, x, y);
-    ui.testMouse(w.WM.RBUTTONUP, x, y);
+    ui.testMouse(w.MouseMsg.right_down, x, y);
+    ui.testMouse(w.MouseMsg.right_up, x, y);
 }
 /// 辅助：中键点一下
 fn middleClick(x: i32, y: i32) void {
-    ui.testMouse(w.WM.MBUTTONDOWN, x, y);
-    ui.testMouse(w.WM.MBUTTONUP, x, y);
+    ui.testMouse(w.MouseMsg.middle_down, x, y);
+    ui.testMouse(w.MouseMsg.middle_up, x, y);
 }
 /// 辅助：格子 → 客户区坐标
 fn cellXY(L: ui.Layout, k: usize) [2]i32 {
@@ -163,14 +163,14 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
     const cx = L.board_x + @as(i32, @intCast(ui.game_ptr.w / 2)) * L.cell + @divTrunc(L.cell, 2);
     const cy = L.board_y + @as(i32, @intCast(ui.game_ptr.h / 2)) * L.cell + @divTrunc(L.cell, 2);
     const mid_cell: usize = @as(usize, @intCast(ui.game_ptr.h / 2)) * ui.game_ptr.w + @as(usize, @intCast(ui.game_ptr.w / 2));
-    ui.testMouse(w.WM.LBUTTONDOWN, cx, cy);
+    ui.testMouse(w.MouseMsg.left_down, cx, cy);
     expect(out, !ui.game_ptr.started, "只按下不该开局");
     expect(out, ui.game_ptr.open[mid_cell] == 0, "只按下不该翻开格子");
     expect(out, ui.testPressCell() == @as(i32, @intCast(mid_cell)), "按下应记下被按住的那一格");
     expect(out, ui.testCellSprite(mid_cell) == ui.testBlankSprite, "按住的那格应画成已翻开的空白");
     expect(out, !ui.testFaceDown(), "按棋盘不该换成按下脸");
     expect(out, ui.testFaceSpriteIsScan(), "按住棋盘准备翻开时应播「脸扫雷」");
-    ui.testMouse(w.WM.LBUTTONUP, cx, cy);
+    ui.testMouse(w.MouseMsg.left_up, cx, cy);
     expect(out, ui.game_ptr.started, "松开后才开局");
     expect(out, ui.game_ptr.openedCount() >= 9, "开局应连片（≥9 格）");
     expect(out, ui.testPressCell() < 0, "松开后不该还有按住的格子");
@@ -195,12 +195,12 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, t1 >= 0 and t2 >= 0, "应能找到两个未翻开的非雷格");
         const p1 = cellXY(L, @intCast(t1));
         const p2 = cellXY(L, @intCast(t2));
-        ui.testMouse(w.WM.LBUTTONDOWN, p1[0], p1[1]);
+        ui.testMouse(w.MouseMsg.left_down, p1[0], p1[1]);
         expect(out, ui.testPressCell() == t1, "按下时应按住第一格");
-        ui.testMouse(w.WM.MOUSEMOVE, p2[0], p2[1]);
+        ui.testMouse(w.MouseMsg.move, p2[0], p2[1]);
         expect(out, ui.testPressCell() == t2, "拖到第二格后，按住预览应跟过去");
         expect(out, ui.testCellSprite(@intCast(t1)) == ui.testClosedSprite, "第一格应恢复成未翻开的样子");
-        ui.testMouse(w.WM.LBUTTONUP, p2[0], p2[1]);
+        ui.testMouse(w.MouseMsg.left_up, p2[0], p2[1]);
         expect(out, ui.game_ptr.open[@intCast(t2)] != 0, "松手的那一格应被翻开");
         var before: u32 = 0;
         for (0..ui.game_ptr.n) |k| {
@@ -215,10 +215,10 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }
         if (t3 >= 0) {
             const p3 = cellXY(L, @intCast(t3));
-            ui.testMouse(w.WM.LBUTTONDOWN, p3[0], p3[1]);
-            ui.testMouse(w.WM.MOUSEMOVE, L.header_x + 4, L.header_y + 4);
+            ui.testMouse(w.MouseMsg.left_down, p3[0], p3[1]);
+            ui.testMouse(w.MouseMsg.move, L.header_x + 4, L.header_y + 4);
             expect(out, ui.testPressCell() < 0, "拖出棋盘后不该还有按住的格子");
-            ui.testMouse(w.WM.LBUTTONUP, L.header_x + 4, L.header_y + 4);
+            ui.testMouse(w.MouseMsg.left_up, L.header_x + 4, L.header_y + 4);
             var after: u32 = 0;
             for (0..ui.game_ptr.n) |k| {
                 if (ui.game_ptr.open[k] != 0) after += 1;
@@ -252,8 +252,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
     expect(out, ui.game_ptr.flag[@intCast(closed)] == 2, "中键不应再清旗");
     expect(out, ui.game_ptr.flags_of[2] == 1 and ui.game_ptr.flags_of[1] == 0, "中键不应改动旗帜计数");
     expect(out, ui.game_ptr.open[@intCast(closed)] == 0, "中键点在未翻开格上不应翻开它");
-    ui.testMouse(w.WM.RBUTTONDBLCLK, fx, fy);
-    ui.testMouse(w.WM.RBUTTONUP, fx, fy);
+    ui.testMouse(w.MouseMsg.right_dblclk, fx, fy);
+    ui.testMouse(w.MouseMsg.right_up, fx, fy);
     expect(out, ui.game_ptr.flag[@intCast(closed)] == 3, "连点的第二下（DBLCLK）也应循环旗帜");
     middleClick(fx, fy);
     expect(out, ui.game_ptr.flag[@intCast(closed)] == 3, "中键连点也不该动旗帜");
@@ -347,8 +347,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         const L0 = ui.testLayout();
         start_k = @as(usize, @intCast(ui.game_ptr.h)) * ui.game_ptr.w - 1;
         const ps = cellXY(L0, start_k);
-        ui.testMouse(w.WM.LBUTTONDOWN, ps[0], ps[1]);
-        ui.testMouse(w.WM.LBUTTONUP, ps[0], ps[1]);
+        ui.testMouse(w.MouseMsg.left_down, ps[0], ps[1]);
+        ui.testMouse(w.MouseMsg.left_up, ps[0], ps[1]);
         expect(out, ui.game_ptr.started, "左键松开应开局");
         expect(out, ui.game_ptr.flag[@intCast(pre)] == 1, "开局后旗帜应保留");
         expect(out, ui.game_ptr.flags_of[1] == 1, "开局后旗帜计数应保留");
@@ -368,9 +368,9 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         const p = cellXY(ui.testLayout(), @intCast(t));
         rightClick(p[0], p[1]);
         expect(out, ui.game_ptr.flag[@intCast(t)] == 1, "先给它插一面 +1 旗");
-        ui.testMouse(w.WM.LBUTTONDOWN, p[0], p[1]);
+        ui.testMouse(w.MouseMsg.left_down, p[0], p[1]);
         expect(out, ui.testPressCell() == t, "插旗格也能按下（按下时照样显示预览）");
-        ui.testMouse(w.WM.LBUTTONUP, p[0], p[1]);
+        ui.testMouse(w.MouseMsg.left_up, p[0], p[1]);
         expect(out, ui.game_ptr.open[@intCast(t)] == 0, "插了旗的格子左键翻不开");
         expect(out, ui.game_ptr.flag[@intCast(t)] == 1, "翻不开时旗子应原样保留");
         rightClick(p[0], p[1]);
@@ -378,8 +378,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         rightClick(p[0], p[1]);
         rightClick(p[0], p[1]);
         expect(out, ui.game_ptr.flag[@intCast(t)] == 0, "四次右键应把旗循环回空");
-        ui.testMouse(w.WM.LBUTTONDOWN, p[0], p[1]);
-        ui.testMouse(w.WM.LBUTTONUP, p[0], p[1]);
+        ui.testMouse(w.MouseMsg.left_down, p[0], p[1]);
+        ui.testMouse(w.MouseMsg.left_up, p[0], p[1]);
         expect(out, ui.game_ptr.open[@intCast(t)] != 0, "撤旗之后左键就能翻开");
         out.writer().print("4c 旗子保护格子：通过\n", .{}) catch {};
     }
@@ -387,26 +387,26 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
 // 5) 人脸重开
     const face_x = ui.testFaceX() + 13 * L.z;
     const face_y = ui.testFaceY() + 13 * L.z;
-    ui.testMouse(w.WM.LBUTTONDOWN, face_x, face_y);
+    ui.testMouse(w.MouseMsg.left_down, face_x, face_y);
     expect(out, ui.testFaceDown(), "按在人脸上应显示按下脸");
     expect(out, ui.testFaceArmed(), "按在人脸上应记下『这次是从人脸按下的』");
     expect(out, ui.testFaceSpriteIsDown(), "按住时用的应是「脸按下」那张贴图");
-    ui.testMouse(w.WM.LBUTTONUP, face_x, face_y);
+    ui.testMouse(w.MouseMsg.left_up, face_x, face_y);
     expect(out, !ui.game_ptr.started, "松开后应重开（回到未开局）");
     expect(out, !ui.testFaceDown(), "重开后脸应恢复正常");
     out.writer().print("5 人脸重开：通过\n", .{}) catch {};
 
 // 6) 键盘 F2
-    ui.testMouse(w.WM.LBUTTONDOWN, cx, cy);
-    ui.testMouse(w.WM.LBUTTONUP, cx, cy);
+    ui.testMouse(w.MouseMsg.left_down, cx, cy);
+    ui.testMouse(w.MouseMsg.left_up, cx, cy);
     expect(out, ui.game_ptr.started, "再开一局");
     _ = ui.testKey(0x72);
     expect(out, !ui.game_ptr.started, "F2 应重开（回到未开局）");
     out.writer().print("6 键盘 F2：通过\n", .{}) catch {};
 
 // 7) 展开：判据不通过时不动棋盘
-    ui.testMouse(w.WM.LBUTTONDOWN, cx, cy);
-    ui.testMouse(w.WM.LBUTTONUP, cx, cy);
+    ui.testMouse(w.MouseMsg.left_down, cx, cy);
+    ui.testMouse(w.MouseMsg.left_up, cx, cy);
     var target: i32 = -1;
     for (0..ui.game_ptr.n) |k| {
         if (ui.game_ptr.open[k] != 0 and ui.game_ptr.mine[k] == 0) {
@@ -441,10 +441,10 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
 
 // 7.1 左右键同时点击：按住预览、松手展开
         {
-            ui.testMouse(w.WM.LBUTTONDOWN, tx, ty);
+            ui.testMouse(w.MouseMsg.left_down, tx, ty);
             expect(out, !ui.testFaceDown(), "按棋盘（准备翻格）不该播按下脸");
             expect(out, ui.testFaceSpriteIsScan(), "按住棋盘准备翻开时应播「脸扫雷」");
-            ui.testMouse(w.WM.RBUTTONDOWN, tx, ty);
+            ui.testMouse(w.MouseMsg.right_down, tx, ty);
             expect(out, ui.testChordCell() == target, "左右键同时按下应记下展开目标");
             expect(out, !ui.testFaceDown(), "左右键同时按住时更不该播按下脸");
             expect(out, ui.testFaceSpriteIsScan(), "左右键同时按住（准备展开）应播「脸扫雷」");
@@ -458,7 +458,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             for (0..ui.game_ptr.n) |k| {
                 if (ui.game_ptr.open[k] != 0) before_open += 1;
             }
-            ui.testMouse(w.WM.RBUTTONUP, tx, ty);
+            ui.testMouse(w.MouseMsg.right_up, tx, ty);
             expect(out, ui.testChordCell() < 0, "松手后展开预览应清掉");
             var after_open: u32 = 0;
             for (0..ui.game_ptr.n) |k| {
@@ -482,7 +482,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             for (0..ui.game_ptr.n) |k| {
                 if (ui.game_ptr.open[k] != 0) before_open += 1;
             }
-            ui.testMouse(w.WM.MBUTTONDOWN, tx, ty);
+            ui.testMouse(w.MouseMsg.middle_down, tx, ty);
             expect(out, ui.testChordCell() == target, "中键按住应记下展开目标");
             expect(out, !ui.testFaceDown(), "中键按住不该播按下脸");
             expect(out, ui.testFaceSpriteIsScan(), "中键按住（准备展开）应播「脸扫雷」");
@@ -491,7 +491,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
                 if (ui.game_ptr.open[k] != 0) after_open_mid += 1;
             }
             expect(out, after_open_mid == before_open, "中键只按下还没松开时不该展开");
-            ui.testMouse(w.WM.MBUTTONUP, tx, ty);
+            ui.testMouse(w.MouseMsg.middle_up, tx, ty);
             expect(out, ui.testChordCell() < 0, "中键松手后预览应清掉");
             var after_open: u32 = 0;
             for (0..ui.game_ptr.n) |k| {
@@ -508,8 +508,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             for (0..ui.game_ptr.n) |k| {
                 if (ui.game_ptr.open[k] != 0) before_open += 1;
             }
-            ui.testMouse(w.WM.LBUTTONDBLCLK, tx, ty);
-            ui.testMouse(w.WM.LBUTTONUP, tx, ty);
+            ui.testMouse(w.MouseMsg.left_dblclk, tx, ty);
+            ui.testMouse(w.MouseMsg.left_up, tx, ty);
             var after_open: u32 = 0;
             for (0..ui.game_ptr.n) |k| {
                 if (ui.game_ptr.open[k] != 0) after_open += 1;
@@ -530,10 +530,10 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             }
             const t2x = L.board_x + @as(i32, @intCast(@as(usize, @intCast(t2)) % ui.game_ptr.w)) * L.cell + @divTrunc(L.cell, 2);
             const t2y = L.board_y + @as(i32, @intCast(@as(usize, @intCast(t2)) / ui.game_ptr.w)) * L.cell + @divTrunc(L.cell, 2);
-            ui.testMouse(w.WM.LBUTTONDOWN, t2x, t2y);
-            ui.testMouse(w.WM.RBUTTONDOWN, t2x, t2y);
-            ui.testMouse(w.WM.RBUTTONUP, t2x, t2y);
-            ui.testMouse(w.WM.LBUTTONUP, t2x, t2y);
+            ui.testMouse(w.MouseMsg.left_down, t2x, t2y);
+            ui.testMouse(w.MouseMsg.right_down, t2x, t2y);
+            ui.testMouse(w.MouseMsg.right_up, t2x, t2y);
+            ui.testMouse(w.MouseMsg.left_up, t2x, t2y);
             var after2: u32 = 0;
             for (0..ui.game_ptr.n) |k| {
                 if (ui.game_ptr.open[k] != 0) after2 += 1;
@@ -635,8 +635,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         const L3 = ui.testLayout();
         const c3x = L3.board_x + 6 * L3.cell + @divTrunc(L3.cell, 2);
         const c3y = L3.board_y + 6 * L3.cell + @divTrunc(L3.cell, 2);
-        ui.testMouse(w.WM.LBUTTONDOWN, c3x, c3y);
-        ui.testMouse(w.WM.LBUTTONUP, c3x, c3y);
+        ui.testMouse(w.MouseMsg.left_down, c3x, c3y);
+        ui.testMouse(w.MouseMsg.left_up, c3x, c3y);
         expect(out, ui.game_ptr.type_total[1] == 0 and ui.game_ptr.type_total[3] == 0, "纯实+纯虚之外的两类应为 0");
         expect(out, ui.game_ptr.type_total[2] == 7 and ui.game_ptr.type_total[4] == 7, "实际配比应等于请求");
         out.writer().print("9 自定义对话框：校验/均分/生效 通过\n", .{}) catch {};
@@ -651,8 +651,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             if (ui.game_ptr.mine[k] != 0) continue;
             const mx = L4.board_x + @as(i32, @intCast(k % ui.game_ptr.w)) * L4.cell + @divTrunc(L4.cell, 2);
             const my = L4.board_y + @as(i32, @intCast(k / ui.game_ptr.w)) * L4.cell + @divTrunc(L4.cell, 2);
-            ui.testMouse(w.WM.LBUTTONDOWN, mx, my);
-            ui.testMouse(w.WM.LBUTTONUP, mx, my);
+            ui.testMouse(w.MouseMsg.left_down, mx, my);
+            ui.testMouse(w.MouseMsg.left_up, mx, my);
             started = true;
             if (ui.game_ptr.over) break;
         }
@@ -668,10 +668,10 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }
         if (t >= 0) {
             const p = cellXY(ui.testLayout(), @intCast(t));
-            ui.testMouse(w.WM.LBUTTONDOWN, p[0], p[1]);
+            ui.testMouse(w.MouseMsg.left_down, p[0], p[1]);
             expect(out, ui.testPressCell() < 0, "胜利后按下不该再压住格子");
             expect(out, !ui.testFaceDown(), "胜利后按棋盘不该再换脸");
-            ui.testMouse(w.WM.LBUTTONUP, p[0], p[1]);
+            ui.testMouse(w.MouseMsg.left_up, p[0], p[1]);
             expect(out, ui.testFaceSpriteIsWin(), "胜利后点棋盘仍是胜利脸");
         }
         out.writer().print("10 整局通关：胜利脸 + 全部翻开 + 结束后不响应 通过\n", .{}) catch {};
@@ -683,8 +683,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         const L5 = ui.testLayout();
         const mid_x = L5.board_x + 2 * L5.cell + @divTrunc(L5.cell, 2);
         const mid_y = L5.board_y + 2 * L5.cell + @divTrunc(L5.cell, 2);
-        ui.testMouse(w.WM.LBUTTONDOWN, mid_x, mid_y);
-        ui.testMouse(w.WM.LBUTTONUP, mid_x, mid_y);
+        ui.testMouse(w.MouseMsg.left_down, mid_x, mid_y);
+        ui.testMouse(w.MouseMsg.left_up, mid_x, mid_y);
         expect(out, ui.game_ptr.started, "应先开局");
         var mine_cell: i32 = -1;
         for (0..ui.game_ptr.n) |k| {
@@ -696,8 +696,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, mine_cell >= 0, "开局后应能找到雷格");
         const mx2 = L5.board_x + @as(i32, @intCast(@as(usize, @intCast(mine_cell)) % ui.game_ptr.w)) * L5.cell + @divTrunc(L5.cell, 2);
         const my2 = L5.board_y + @as(i32, @intCast(@as(usize, @intCast(mine_cell)) / ui.game_ptr.w)) * L5.cell + @divTrunc(L5.cell, 2);
-        ui.testMouse(w.WM.LBUTTONDOWN, mx2, my2);
-        ui.testMouse(w.WM.LBUTTONUP, mx2, my2);
+        ui.testMouse(w.MouseMsg.left_down, mx2, my2);
+        ui.testMouse(w.MouseMsg.left_up, mx2, my2);
         expect(out, ui.game_ptr.over and !ui.game_ptr.win, "点雷应判负");
         expect(out, ui.game_ptr.boom == mine_cell, "应记录踩中的格子");
         expect(out, ui.testFaceSpriteIsDead(), "失败后应换成死亡脸");
@@ -711,10 +711,10 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         }
         if (t2 >= 0) {
             const p2 = cellXY(ui.testLayout(), @intCast(t2));
-            ui.testMouse(w.WM.LBUTTONDOWN, p2[0], p2[1]);
+            ui.testMouse(w.MouseMsg.left_down, p2[0], p2[1]);
             expect(out, ui.testPressCell() < 0, "失败后按下不该再压住格子");
             expect(out, !ui.testFaceDown(), "失败后按棋盘不该再换脸");
-            ui.testMouse(w.WM.LBUTTONUP, p2[0], p2[1]);
+            ui.testMouse(w.MouseMsg.left_up, p2[0], p2[1]);
             const before_flag = ui.game_ptr.flag[@intCast(t2)];
             rightClick(p2[0], p2[1]);
             expect(out, ui.game_ptr.flag[@intCast(t2)] == before_flag, "失败后右键不该再改旗帜");
@@ -726,10 +726,10 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         {
             const fpx = ui.testFaceX() + 13 * L.z;
             const fpy = ui.testFaceY() + 13 * L.z;
-            ui.testMouse(w.WM.LBUTTONDOWN, fpx, fpy);
+            ui.testMouse(w.MouseMsg.left_down, fpx, fpy);
             expect(out, ui.testFaceDown(), "结束后按人脸按钮应播按下脸（准备重开）");
             expect(out, ui.testFaceSpriteIsDown(), "结束后按人脸按钮用的应是「脸按下」贴图");
-            ui.testMouse(w.WM.LBUTTONUP, fpx, fpy);
+            ui.testMouse(w.MouseMsg.left_up, fpx, fpy);
             expect(out, !ui.game_ptr.over, "松开人脸按钮应重开一局");
             out.writer().print("11b 结束后按人脸重开：按下脸 → 松开重开 通过\n", .{}) catch {};
         }
@@ -822,8 +822,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         const Ls = ui.testLayout();
         const sx0 = Ls.board_x + 4 * Ls.cell + @divTrunc(Ls.cell, 2);
         const sy0 = Ls.board_y + 4 * Ls.cell + @divTrunc(Ls.cell, 2);
-        ui.testMouse(w.WM.LBUTTONDOWN, sx0, sy0);
-        ui.testMouse(w.WM.LBUTTONUP, sx0, sy0);
+        ui.testMouse(w.MouseMsg.left_down, sx0, sy0);
+        ui.testMouse(w.MouseMsg.left_up, sx0, sy0);
         expect(out, ui.game_ptr.started, "先开一局才谈得上计时的声音");
         ui.testBackdate(0);
         ui.testTimerTick();
@@ -849,8 +849,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             const Le = ui.testLayout();
             const px = Le.board_x + @divTrunc(Le.cell, 2);
             const py = Le.board_y + @divTrunc(Le.cell, 2);
-            ui.testMouse(w.WM.LBUTTONDOWN, px, py);
-            ui.testMouse(w.WM.LBUTTONUP, px, py);
+            ui.testMouse(w.MouseMsg.left_down, px, py);
+            ui.testMouse(w.MouseMsg.left_up, px, py);
             ui.testFaceFlashExpire();
             expect(out, ui.game_ptr.started and !ui.game_ptr.over, "高级盘第一下必是安全开局");
             var snd_cell: i32 = -1;
@@ -863,8 +863,8 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
             expect(out, snd_cell >= 0, "高级盘（99 雷）四种雷都该有");
             ui.testSoundReset();
             const p = cellXY(Le, @intCast(snd_cell));
-            ui.testMouse(w.WM.LBUTTONDOWN, p[0], p[1]);
-            ui.testMouse(w.WM.LBUTTONUP, p[0], p[1]);
+            ui.testMouse(w.MouseMsg.left_down, p[0], p[1]);
+            ui.testMouse(w.MouseMsg.left_up, p[0], p[1]);
             expect(out, ui.game_ptr.over and !ui.game_ptr.win, "点雷应判负");
             expect(out, ui.testSoundCount(@as(usize, t) - 1) == 1, "踩中该类雷应播对应那一段踩雷音");
             var others: u32 = 0;

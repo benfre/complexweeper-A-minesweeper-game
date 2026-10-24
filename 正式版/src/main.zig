@@ -1,7 +1,7 @@
 // 复扫雷 正式版 · 主程序
 // 纯 Win32 + GDI，无第三方库、无 libc、无运行时依赖，编译结果为单个 exe。
 const std = @import("std");
-const w = @import("win32.zig");
+const w = @import("ui.zig");
 const g = @import("game.zig");
 const A = @import("assets.zig");
 const snd = @import("sounds.zig");
@@ -1251,213 +1251,241 @@ fn mainWndProc(hwnd: w.HWND, msg: w.UINT, wp: w.WPARAM, lp: w.LPARAM) callconv(.
             if (dc != null) paint(dc, layout());
             return 0;
         },
-        w.WM.TIMER => {
-            if (wp == TIMER_FLASH) {
-                // 「脸扫雷」那段一闪而过：到点就把脸收回普通状态
-                _ = w.KillTimer(hwnd, TIMER_FLASH);
-                _ = w.InvalidateRect(hwnd, null, 0);
-                return 0;
-            }
-            if (game.started and !game.over) {
-                game.elapsed_ms = w.GetTickCount() -% game.t0;
-                maybePlayTick();
-            }
-            _ = w.InvalidateRect(hwnd, null, 0);
-            return 0;
-        },
+        w.WM.TIMER => return onTimer(hwnd, wp),
         w.WM.COMMAND => {
             const id = @as(usize, @intCast(@as(u16, @truncate(wp))));
-            handleCommand(hwnd, id);
-            return 0;
+            return onCommand(hwnd, id);
         },
-        w.WM.KEYDOWN => {
-            if (wp == 0x72) { // F2
-                startNewGame(null);
-                return 0;
-            }
-            return 0;
-        },
+        w.WM.KEYDOWN => return onKeyDown(wp),
         // 左键按下（含双击的第二下）：只"压住"不翻开，松手才真翻。
         // 「脸按下」**只属于人脸按钮本身**：按棋盘（翻格/展开/插旗）一律不播它，
         // 那时候该出现的是「脸扫雷」——翻格、插旗、展开成功各闪一下。
-        w.WM.LBUTTONDOWN, w.WM.LBUTTONDBLCLK => {
-            const L = layout();
-            const x = w.loWord(lp);
-            const y = w.hiWord(lp);
-            const on_face = inFace(L, x, y);
-            l_down = true;
-            face_armed = on_face;
-            face_down = on_face;
-            _ = w.SetCapture(hwnd);
-            const c = cellAt(L, x, y);
-            if (r_down) {
-                // 右键已经按着 → 这是"左右键同时点击"，进入展开预览（松手才真展开）
-                chord_cell = c;
-                press_cell = -1;
-            } else {
-                // 传统扫雷：按下不翻开，只把那一格"压住"（画成已翻开的空白），松手才真翻。
-                // 拖到别的格子上，按住的格子跟着走；拖出棋盘就取消。
-                press_cell = if (c >= 0 and !on_face and !game.over and game.open[@intCast(c)] == 0) c else -1;
-            }
-            _ = w.InvalidateRect(hwnd, null, 0);
-            return 0;
-        },
-        w.WM.MOUSEMOVE => {
-            const L = layout();
-            const c = cellAt(L, w.loWord(lp), w.hiWord(lp));
-            // 展开预览跟着鼠标走（拖出棋盘就取消）
-            if (chord_cell >= 0) {
-                const next: i32 = if (c >= 0) c else -1;
-                if (next != chord_cell) {
-                    chord_cell = next;
-                    _ = w.InvalidateRect(hwnd, null, 0);
-                }
-                return 0;
-            }
-            if (press_cell < 0) return 0;
-            const next: i32 = if (c >= 0 and game.open[@intCast(c)] == 0) c else -1;
-            if (next != press_cell) {
-                press_cell = next;
-                _ = w.InvalidateRect(hwnd, null, 0);
-            }
-            return 0;
-        },
-        w.WM.LBUTTONUP => {
-            const L = layout();
-            const x = w.loWord(lp);
-            const y = w.hiWord(lp);
-            // 先把这次按下的状态读进局部量：ReleaseCapture() 会**同步**发 WM_CAPTURECHANGED，
-            // 而那条消息会把 press_cell / face_armed 清掉（踩过一次：先 ReleaseCapture 再判断，
-            // 结果人脸永远重开不了）。
-            const held = press_cell;
-            const chord = chord_cell;
-            const was_face = face_armed;
-            l_down = false;
-            press_cell = -1;
-            chord_cell = -1;
-            face_down = false; // 按下脸到此结束——和"正式翻开/展开"同一时刻
-            face_armed = false;
-            _ = w.ReleaseCapture();
-            // 人脸按钮：按下与松开都必须在脸上才算重开（从棋盘拖到脸上松手不算）
-            if (was_face and inFace(L, x, y)) {
-                _ = w.KillTimer(hwnd, TIMER_ID);
-                startNewGame(null);
-                return 0;
-            }
-            // 左右键同时点击：在按住的那一格上松手才真展开
-            if (chord >= 0) {
-                if (cellAt(L, x, y) == chord) doExpand(hwnd, @intCast(chord));
-                _ = w.InvalidateRect(hwnd, null, 0);
-                return 0;
-            }
-            // 只在"按住的那一格"上松手才生效；插了旗的格子左键打不开（传统扫雷：旗子保护它，
-            // 要翻开得先用右键把旗循环回"空"）
-            if (held >= 0 and cellAt(L, x, y) == held and !game.over and game.flag[@intCast(held)] == 0) {
-                const c: usize = @intCast(held);
-                const covered = game.open[c] == 0;
-                if (!game.started) {
-                    game.startAt(c, nowMs());
-                    game.setMsg(.started);
-                    _ = w.SetTimer(hwnd, TIMER_ID, 250, null);
-                } else {
-                    game.reveal(c, nowMs());
-                    afterGameAction(hwnd);
-                }
-                // 真翻开了（或开局连片了）就让脸闪一下；局面已结束时不闪（那时是胜利/死亡脸）
-                if (covered and !game.over) flashFace(hwnd);
-            }
-            _ = w.InvalidateRect(hwnd, null, 0);
-            return 0;
-        },
-        w.WM.RBUTTONDOWN, w.WM.RBUTTONDBLCLK => {
-            // 连点两下时，第二下收到的是 DBLCLK 而不是 DOWN —— 不一起处理的话
-            // 快速连点会丢一次按键（实测：连点两下只走一步）。开局前也允许插旗
-            // （传统扫雷就是这样，旗帜会保留到开局之后）。
-            r_down = true;
-            const L = layout();
-            const c = cellAt(L, w.loWord(lp), w.hiWord(lp));
-            if (l_down) {
-                // 左键已经按着 → 这是"左右键同时点击"，进入展开预览（松手才真展开）
-                chord_cell = c;
-                press_cell = -1;
-                _ = w.InvalidateRect(hwnd, null, 0);
-                return 0;
-            }
-            if (c >= 0 and !game.over and game.open[@intCast(c)] == 0) {
-                if (game.cycleFlag(@intCast(c))) {
-                    flashFace(hwnd); // 插旗也算"动手扫雷"，脸闪一下
-                    _ = w.InvalidateRect(hwnd, null, 0);
-                }
-            }
-            return 0;
-        },
-        w.WM.RBUTTONUP => {
-            r_down = false;
-            // 左右键同时点击：先松右键也算数（传统扫雷是"先松哪个都展开"）
-            const chord = chord_cell;
-            if (chord >= 0) {
-                const L = layout();
-                chord_cell = -1;
-                press_cell = -1;
-                face_down = false;
-                if (cellAt(L, w.loWord(lp), w.hiWord(lp)) == chord) doExpand(hwnd, @intCast(chord));
-                _ = w.ReleaseCapture();
-                _ = w.InvalidateRect(hwnd, null, 0);
-            }
-            return 0;
-        },
+        w.WM.LBUTTONDOWN, w.WM.LBUTTONDBLCLK => return onLeftDown(hwnd, w.loWord(lp), w.hiWord(lp)),
+        w.WM.MOUSEMOVE => return onMouseMove(hwnd, w.loWord(lp), w.hiWord(lp)),
+        w.WM.LBUTTONUP => return onLeftUp(hwnd, w.loWord(lp), w.hiWord(lp)),
+        w.WM.RBUTTONDOWN, w.WM.RBUTTONDBLCLK => return onRightDown(hwnd, w.loWord(lp), w.hiWord(lp)),
+        w.WM.RBUTTONUP => return onRightUp(hwnd, w.loWord(lp), w.hiWord(lp)),
         // 中键：按住时先预览周围即将展开的格子，松手才真展开（不再是按下就展开）。
         // 按住期间人脸播「脸扫雷」（跟按住左键准备翻开一样）。
-        w.WM.MBUTTONDOWN, w.WM.MBUTTONDBLCLK => {
-            const L = layout();
-            const c = cellAt(L, w.loWord(lp), w.hiWord(lp));
-            m_down = true;
-            chord_cell = c;
-            press_cell = -1;
-            _ = w.SetCapture(hwnd);
-            _ = w.InvalidateRect(hwnd, null, 0);
-            return 0;
-        },
-        w.WM.MBUTTONUP => {
-            const L = layout();
-            const chord = chord_cell;
-            m_down = false;
-            chord_cell = -1;
-            face_down = false;
-            _ = w.ReleaseCapture();
-            if (chord >= 0 and cellAt(L, w.loWord(lp), w.hiWord(lp)) == chord) doExpand(hwnd, @intCast(chord));
-            _ = w.InvalidateRect(hwnd, null, 0);
-            return 0;
-        },
-        w.WM.CAPTURECHANGED => {
-            if (face_down or face_armed or press_cell >= 0 or chord_cell >= 0 or l_down or r_down or m_down) {
-                face_down = false;
-                face_armed = false;
-                press_cell = -1;
-                chord_cell = -1;
-                l_down = false;
-                r_down = false;
-                m_down = false;
-                _ = w.InvalidateRect(hwnd, null, 0);
-            }
-            return 0;
-        },
-        w.WM.CLOSE => {
-            _ = w.DestroyWindow(hwnd);
-            return 0;
-        },
-        w.WM.DESTROY => {
-            _ = w.KillTimer(hwnd, TIMER_ID);
-            if (mem_dc != null) {
-                _ = w.DeleteObject(mem_bmp);
-                _ = w.DeleteDC(mem_dc);
-                mem_dc = null;
-            }
-            w.PostQuitMessage(0);
-            return 0;
-        },
+        w.WM.MBUTTONDOWN, w.WM.MBUTTONDBLCLK => return onMiddleDown(hwnd, w.loWord(lp), w.hiWord(lp)),
+        w.WM.MBUTTONUP => return onMiddleUp(hwnd, w.loWord(lp), w.hiWord(lp)),
+        w.WM.CAPTURECHANGED => return onCaptureChanged(hwnd),
+        w.WM.CLOSE => return onClose(hwnd),
+        w.WM.DESTROY => return onDestroy(hwnd),
         else => return w.DefWindowProcW(hwnd, msg, wp, lp),
     }
+}
+
+// ------------------------------------------------------------------ 事件处理器
+// WndProc 里各条消息的 body 抽成平台无关函数：Win32 的 wndProc 与 GTK 的信号回调
+// 都调用这同一批（Phase 1），交互逻辑只写一份。
+fn onTimer(hwnd: w.HWND, wp: w.WPARAM) w.LRESULT {
+    if (wp == TIMER_FLASH) {
+        // 「脸扫雷」那段一闪而过：到点就把脸收回普通状态
+        _ = w.KillTimer(hwnd, TIMER_FLASH);
+        _ = w.InvalidateRect(hwnd, null, 0);
+        return 0;
+    }
+    if (game.started and !game.over) {
+        game.elapsed_ms = w.GetTickCount() -% game.t0;
+        maybePlayTick();
+    }
+    _ = w.InvalidateRect(hwnd, null, 0);
+    return 0;
+}
+
+fn onCommand(hwnd: w.HWND, id: usize) w.LRESULT {
+    handleCommand(hwnd, id);
+    return 0;
+}
+
+fn onKeyDown(vk: w.WPARAM) w.LRESULT {
+    if (vk == 0x72) { // F2
+        startNewGame(null);
+        return 0;
+    }
+    return 0;
+}
+
+/// 左键按下（含双击的第二下）：只"压住"不翻开，松手才真翻。
+fn onLeftDown(hwnd: w.HWND, x: i32, y: i32) w.LRESULT {
+    const L = layout();
+    const on_face = inFace(L, x, y);
+    l_down = true;
+    face_armed = on_face;
+    face_down = on_face;
+    _ = w.SetCapture(hwnd);
+    const c = cellAt(L, x, y);
+    if (r_down) {
+        // 右键已经按着 → 这是"左右键同时点击"，进入展开预览（松手才真展开）
+        chord_cell = c;
+        press_cell = -1;
+    } else {
+        // 传统扫雷：按下不翻开，只把那一格"压住"（画成已翻开的空白），松手才真翻。
+        // 拖到别的格子上，按住的格子跟着走；拖出棋盘就取消。
+        press_cell = if (c >= 0 and !on_face and !game.over and game.open[@intCast(c)] == 0) c else -1;
+    }
+    _ = w.InvalidateRect(hwnd, null, 0);
+    return 0;
+}
+
+fn onMouseMove(hwnd: w.HWND, x: i32, y: i32) w.LRESULT {
+    const L = layout();
+    const c = cellAt(L, x, y);
+    // 展开预览跟着鼠标走（拖出棋盘就取消）
+    if (chord_cell >= 0) {
+        const next: i32 = if (c >= 0) c else -1;
+        if (next != chord_cell) {
+            chord_cell = next;
+            _ = w.InvalidateRect(hwnd, null, 0);
+        }
+        return 0;
+    }
+    if (press_cell < 0) return 0;
+    const next: i32 = if (c >= 0 and game.open[@intCast(c)] == 0) c else -1;
+    if (next != press_cell) {
+        press_cell = next;
+        _ = w.InvalidateRect(hwnd, null, 0);
+    }
+    return 0;
+}
+
+fn onLeftUp(hwnd: w.HWND, x: i32, y: i32) w.LRESULT {
+    const L = layout();
+    // 先把这次按下的状态读进局部量：ReleaseCapture() 会**同步**发 WM_CAPTURECHANGED，
+    // 而那条消息会把 press_cell / face_armed 清掉（踩过一次：先 ReleaseCapture 再判断，
+    // 结果人脸永远重开不了）。
+    const held = press_cell;
+    const chord = chord_cell;
+    const was_face = face_armed;
+    l_down = false;
+    press_cell = -1;
+    chord_cell = -1;
+    face_down = false; // 按下脸到此结束——和"正式翻开/展开"同一时刻
+    face_armed = false;
+    _ = w.ReleaseCapture();
+    // 人脸按钮：按下与松开都必须在脸上才算重开（从棋盘拖到脸上松手不算）
+    if (was_face and inFace(L, x, y)) {
+        _ = w.KillTimer(hwnd, TIMER_ID);
+        startNewGame(null);
+        return 0;
+    }
+    // 左右键同时点击：在按住的那一格上松手才真展开
+    if (chord >= 0) {
+        if (cellAt(L, x, y) == chord) doExpand(hwnd, @intCast(chord));
+        _ = w.InvalidateRect(hwnd, null, 0);
+        return 0;
+    }
+    // 只在"按住的那一格"上松手才生效；插了旗的格子左键打不开（传统扫雷：旗子保护它，
+    // 要翻开得先用右键把旗循环回"空"）
+    if (held >= 0 and cellAt(L, x, y) == held and !game.over and game.flag[@intCast(held)] == 0) {
+        const c: usize = @intCast(held);
+        const covered = game.open[c] == 0;
+        if (!game.started) {
+            game.startAt(c, nowMs());
+            game.setMsg(.started);
+            _ = w.SetTimer(hwnd, TIMER_ID, 250, null);
+        } else {
+            game.reveal(c, nowMs());
+            afterGameAction(hwnd);
+        }
+        // 真翻开了（或开局连片了）就让脸闪一下；局面已结束时不闪（那时是胜利/死亡脸）
+        if (covered and !game.over) flashFace(hwnd);
+    }
+    _ = w.InvalidateRect(hwnd, null, 0);
+    return 0;
+}
+
+fn onRightDown(hwnd: w.HWND, x: i32, y: i32) w.LRESULT {
+    // 连点两下时，第二下收到的是 DBLCLK 而不是 DOWN —— 不一起处理的话
+    // 快速连点会丢一次按键（实测：连点两下只走一步）。开局前也允许插旗
+    // （传统扫雷就是这样，旗帜会保留到开局之后）。
+    r_down = true;
+    const L = layout();
+    const c = cellAt(L, x, y);
+    if (l_down) {
+        // 左键已经按着 → 这是"左右键同时点击"，进入展开预览（松手才真展开）
+        chord_cell = c;
+        press_cell = -1;
+        _ = w.InvalidateRect(hwnd, null, 0);
+        return 0;
+    }
+    if (c >= 0 and !game.over and game.open[@intCast(c)] == 0) {
+        if (game.cycleFlag(@intCast(c))) {
+            flashFace(hwnd); // 插旗也算"动手扫雷"，脸闪一下
+            _ = w.InvalidateRect(hwnd, null, 0);
+        }
+    }
+    return 0;
+}
+
+fn onRightUp(hwnd: w.HWND, x: i32, y: i32) w.LRESULT {
+    r_down = false;
+    // 左右键同时点击：先松右键也算数（传统扫雷是"先松哪个都展开"）
+    const chord = chord_cell;
+    if (chord >= 0) {
+        const L = layout();
+        chord_cell = -1;
+        press_cell = -1;
+        face_down = false;
+        if (cellAt(L, x, y) == chord) doExpand(hwnd, @intCast(chord));
+        _ = w.ReleaseCapture();
+        _ = w.InvalidateRect(hwnd, null, 0);
+    }
+    return 0;
+}
+
+fn onMiddleDown(hwnd: w.HWND, x: i32, y: i32) w.LRESULT {
+    const L = layout();
+    const c = cellAt(L, x, y);
+    m_down = true;
+    chord_cell = c;
+    press_cell = -1;
+    _ = w.SetCapture(hwnd);
+    _ = w.InvalidateRect(hwnd, null, 0);
+    return 0;
+}
+
+fn onMiddleUp(hwnd: w.HWND, x: i32, y: i32) w.LRESULT {
+    const L = layout();
+    const chord = chord_cell;
+    m_down = false;
+    chord_cell = -1;
+    face_down = false;
+    _ = w.ReleaseCapture();
+    if (chord >= 0 and cellAt(L, x, y) == chord) doExpand(hwnd, @intCast(chord));
+    _ = w.InvalidateRect(hwnd, null, 0);
+    return 0;
+}
+
+fn onCaptureChanged(hwnd: w.HWND) w.LRESULT {
+    if (face_down or face_armed or press_cell >= 0 or chord_cell >= 0 or l_down or r_down or m_down) {
+        face_down = false;
+        face_armed = false;
+        press_cell = -1;
+        chord_cell = -1;
+        l_down = false;
+        r_down = false;
+        m_down = false;
+        _ = w.InvalidateRect(hwnd, null, 0);
+    }
+    return 0;
+}
+
+fn onClose(hwnd: w.HWND) w.LRESULT {
+    _ = w.DestroyWindow(hwnd);
+    return 0;
+}
+
+fn onDestroy(hwnd: w.HWND) w.LRESULT {
+    _ = w.KillTimer(hwnd, TIMER_ID);
+    if (mem_dc != null) {
+        _ = w.DeleteObject(mem_bmp);
+        _ = w.DeleteDC(mem_dc);
+        mem_dc = null;
+    }
+    w.PostQuitMessage(0);
+    return 0;
 }
 
 /// 自定义对话框点「确定」之后的收尾：菜单与自检走同一条路（顺手把窗口尺寸与局面重排）
@@ -1557,58 +1585,101 @@ fn showHelp() void {
     _ = w.MessageBoxW(hwnd_main, w.wstr(HELP_TEXT), w.wstr("玩法与操作"), w.MB.OK | w.MB.ICONINFORMATION);
 }
 
-fn buildMenu() w.HMENU {
-    const bar = w.CreateMenu();
-    const game_menu = w.CreatePopupMenu();
-    _ = w.AppendMenuW(game_menu, w.MF.STRING, IDM_NEW, w.wstr("开局(&N)\tF2"));
-    _ = w.AppendMenuW(game_menu, w.MF.SEPARATOR, 0, null);
-    // 两个玩法模式各是一个子菜单，难度（三档 + 自定义）在模式里面。
-    // 圆点跟着"当前模式 + 当前难度"走，见 checkMenu()。
-    const cplx_menu = w.CreatePopupMenu();
-    _ = w.AppendMenuW(cplx_menu, w.MF.STRING, IDM_BEGINNER, w.wstr("初级(&B)\t9×9 · 10 雷"));
-    _ = w.AppendMenuW(cplx_menu, w.MF.STRING, IDM_INTERMEDIATE, w.wstr("中级(&I)\t16×16 · 40 雷"));
-    _ = w.AppendMenuW(cplx_menu, w.MF.STRING, IDM_EXPERT, w.wstr("高级(&E)\t30×16 · 99 雷"));
-    _ = w.AppendMenuW(cplx_menu, w.MF.SEPARATOR, 0, null);
-    // 纪录放进各自的模式里：两个模式各记一套，从哪个模式的菜单点进去就看哪一套
-    _ = w.AppendMenuW(cplx_menu, w.MF.STRING, IDM_BEST, w.wstr("最高分纪录(&R)…"));
-    _ = w.AppendMenuW(cplx_menu, w.MF.STRING, IDM_CUSTOM, w.wstr("自定义雷区(&C)…"));
-    _ = w.AppendMenuW(game_menu, w.MF.POPUP, @intFromPtr(cplx_menu), w.wstr("圆复数模式(&C)"));
+// ------------------------------------------------------------------ 菜单
+// 可移植菜单模型：label 存 UTF-8（含 & 加速键与 tab 提示），id 是命令号或子菜单的 key，
+// items 非空即子菜单。Win32 在本文件里按它建 HMENU，GTK 后端照同一棵树建 GtkMenuBar。
+const MENU_GAME: usize = 301;
+const MENU_CMPLX: usize = 302;
+const MENU_HYPER: usize = 303;
+const MENU_HELP: usize = 304;
 
-    const hyper_menu = w.CreatePopupMenu();
-    _ = w.AppendMenuW(hyper_menu, w.MF.STRING, IDM_HYPER_BEGINNER, w.wstr("初级(&B)\t9×9 · 10 雷"));
-    _ = w.AppendMenuW(hyper_menu, w.MF.STRING, IDM_HYPER_INTERMEDIATE, w.wstr("中级(&I)\t16×16 · 40 雷"));
-    _ = w.AppendMenuW(hyper_menu, w.MF.STRING, IDM_HYPER_EXPERT, w.wstr("高级(&E)\t30×16 · 99 雷"));
-    _ = w.AppendMenuW(hyper_menu, w.MF.SEPARATOR, 0, null);
-    _ = w.AppendMenuW(hyper_menu, w.MF.STRING, IDM_HYPER_BEST, w.wstr("最高分纪录(&R)…"));
-    _ = w.AppendMenuW(hyper_menu, w.MF.STRING, IDM_HYPER_CUSTOM, w.wstr("自定义雷区(&C)…"));
-    _ = w.AppendMenuW(game_menu, w.MF.POPUP, @intFromPtr(hyper_menu), w.wstr("双曲复数模式（闵可夫斯基模式）(&M)"));
+const MENU_MODEL = [_]w.MenuItem{
+    .{ .label = "游戏(&G)", .id = MENU_GAME, .items = &[_]w.MenuItem{
+        .{ .label = "开局(&N)\tF2", .id = IDM_NEW },
+        .{ .label = "", .id = 0 },
+        .{ .label = "圆复数模式(&C)", .id = MENU_CMPLX, .items = &[_]w.MenuItem{
+            .{ .label = "初级(&B)\t9×9 · 10 雷", .id = IDM_BEGINNER },
+            .{ .label = "中级(&I)\t16×16 · 40 雷", .id = IDM_INTERMEDIATE },
+            .{ .label = "高级(&E)\t30×16 · 99 雷", .id = IDM_EXPERT },
+            .{ .label = "", .id = 0 },
+            .{ .label = "最高分纪录(&R)…", .id = IDM_BEST },
+            .{ .label = "自定义雷区(&C)…", .id = IDM_CUSTOM },
+        } },
+        .{ .label = "双曲复数模式（闵可夫斯基模式）(&M)", .id = MENU_HYPER, .items = &[_]w.MenuItem{
+            .{ .label = "初级(&B)\t9×9 · 10 雷", .id = IDM_HYPER_BEGINNER },
+            .{ .label = "中级(&I)\t16×16 · 40 雷", .id = IDM_HYPER_INTERMEDIATE },
+            .{ .label = "高级(&E)\t30×16 · 99 雷", .id = IDM_HYPER_EXPERT },
+            .{ .label = "", .id = 0 },
+            .{ .label = "最高分纪录(&R)…", .id = IDM_HYPER_BEST },
+            .{ .label = "自定义雷区(&C)…", .id = IDM_HYPER_CUSTOM },
+        } },
+        .{ .label = "", .id = 0 },
+        .{ .label = "颜色(&Y)", .id = IDM_COLOR },
+        .{ .label = "声音(&S)", .id = IDM_SOUND },
+        .{ .label = "缩放 100%", .id = IDM_ZOOM1 },
+        .{ .label = "缩放 200%", .id = IDM_ZOOM2 },
+        .{ .label = "缩放 300%", .id = IDM_ZOOM3 },
+        .{ .label = "", .id = 0 },
+        .{ .label = "退出(&X)", .id = IDM_EXIT },
+    } },
+    .{ .label = "帮助(&H)", .id = MENU_HELP, .items = &[_]w.MenuItem{
+        .{ .label = "玩法与操作(&H)", .id = IDM_HELP_HOW },
+        .{ .label = "", .id = 0 },
+        .{ .label = "关于复扫雷(&A)…", .id = IDM_HELP_ABOUT },
+    } },
+};
 
-    _ = w.AppendMenuW(game_menu, w.MF.SEPARATOR, 0, null);
-    // 颜色开关：勾选态 = 彩色（默认开），点一下换成黑白贴图。声音开关同理
-    _ = w.AppendMenuW(game_menu, w.MF.STRING, IDM_COLOR, w.wstr("颜色(&Y)"));
-    _ = w.AppendMenuW(game_menu, w.MF.STRING, IDM_SOUND, w.wstr("声音(&S)"));
-    _ = w.AppendMenuW(game_menu, w.MF.STRING, IDM_ZOOM1, w.wstr("缩放 100%"));
-    _ = w.AppendMenuW(game_menu, w.MF.STRING, IDM_ZOOM2, w.wstr("缩放 200%"));
-    _ = w.AppendMenuW(game_menu, w.MF.STRING, IDM_ZOOM3, w.wstr("缩放 300%"));
-    _ = w.AppendMenuW(game_menu, w.MF.SEPARATOR, 0, null);
-    _ = w.AppendMenuW(game_menu, w.MF.STRING, IDM_EXIT, w.wstr("退出(&X)"));
-    _ = w.AppendMenuW(bar, w.MF.POPUP, @intFromPtr(game_menu), w.wstr("游戏(&G)"));
+/// buildMenu 建菜单时按 MENU_* key 记住子菜单句柄，checkMenu 再按 key 取回画单选点。
+/// 两个平台各自实现：Win32 存 HMENU，GTK 存自己的菜单对象。
+const MenuHandles = struct {
+    game: w.HMENU = null,
+    cplx: w.HMENU = null,
+    hyper: w.HMENU = null,
+    help: w.HMENU = null,
+};
+var menu_handles: MenuHandles = .{};
 
-    const help_menu = w.CreatePopupMenu();
-    _ = w.AppendMenuW(help_menu, w.MF.STRING, IDM_HELP_HOW, w.wstr("玩法与操作(&H)"));
-    _ = w.AppendMenuW(help_menu, w.MF.SEPARATOR, 0, null);
-    _ = w.AppendMenuW(help_menu, w.MF.STRING, IDM_HELP_ABOUT, w.wstr("关于复扫雷(&A)…"));
-    _ = w.AppendMenuW(bar, w.MF.POPUP, @intFromPtr(help_menu), w.wstr("帮助(&H)"));
-    return bar;
+fn recordSubmenu(id: usize, menu: w.HMENU) void {
+    switch (id) {
+        MENU_GAME => menu_handles.game = menu,
+        MENU_CMPLX => menu_handles.cplx = menu,
+        MENU_HYPER => menu_handles.hyper = menu,
+        MENU_HELP => menu_handles.help = menu,
+        else => {},
+    }
 }
 
-/// 游戏菜单里两个模式子菜单的位置（只数游戏菜单自己的项目：开局、分隔线、圆复数模式、闵可夫斯基模式…）
-const MODE_MENU_INDEX = [2]i32{ 2, 3 };
+fn appendMenuTree(menu: w.HMENU, items: []const w.MenuItem) void {
+    var lb: [160]u16 = undefined;
+    for (items) |it| {
+        if (it.items.len > 0) {
+            const sub = w.CreatePopupMenu();
+            recordSubmenu(it.id, sub);
+            appendMenuTree(sub, it.items);
+            _ = w.AppendMenuW(menu, w.MF.POPUP, @intFromPtr(sub), w.utf8ToW(&lb, it.label).ptr);
+        } else if (it.label.len == 0) {
+            _ = w.AppendMenuW(menu, w.MF.SEPARATOR, 0, null);
+        } else {
+            _ = w.AppendMenuW(menu, w.MF.STRING, it.id, w.utf8ToW(&lb, it.label).ptr);
+        }
+    }
+}
+
+fn buildMenu() w.HMENU {
+    const bar = w.CreateMenu();
+    var lb: [160]u16 = undefined;
+    for (MENU_MODEL) |top| {
+        const sub = w.CreatePopupMenu();
+        recordSubmenu(top.id, sub);
+        appendMenuTree(sub, top.items);
+        _ = w.AppendMenuW(bar, w.MF.POPUP, @intFromPtr(sub), w.utf8ToW(&lb, top.label).ptr);
+    }
+    return bar;
+}
 
 /// 菜单圆点：只有"当前模式 + 当前难度"那一项是选中态（另一个模式的同名档位不勾），
 /// 自定义棋盘或者界面还没定过档位时三档全部落空。
 /// 用 CheckMenuRadioItem 画出来的是圆点（原版扫雷那样），不是对勾。
-/// 给某一项打/清单选点（开着 = 圆点，关掉 = 什么都没有）
 fn radioCheck(menu: w.HMENU, id: usize, on: bool) void {
     if (on) {
         _ = w.CheckMenuRadioItem(menu, @intCast(id), @intCast(id), @intCast(id), w.MF.BYCOMMAND);
@@ -1618,14 +1689,10 @@ fn radioCheck(menu: w.HMENU, id: usize, on: bool) void {
 }
 
 fn checkMenu() void {
-    if (hwnd_main == null) return;
-    const bar = w.GetMenu(hwnd_main);
-    if (bar == null) return;
-    const game_menu = w.GetSubMenu(bar, 0);
-    if (game_menu == null) return;
+    const game_menu = menu_handles.game orelse return;
     const cur_mode: i32 = if (hyper()) 1 else 0;
-    for (0..2) |k| {
-        const sub = w.GetSubMenu(game_menu, MODE_MENU_INDEX[k]);
+    const mode_subs = [_]w.HMENU{ menu_handles.cplx, menu_handles.hyper };
+    for (mode_subs, 0..) |sub, k| {
         if (sub == null) continue;
         const pick: i32 = if (cur_mode == @as(i32, @intCast(k))) cur_preset else -1;
         if (pick >= 0 and pick < 3) {
@@ -2601,8 +2668,16 @@ pub fn testSoundMuted() bool {
 pub fn testArgCount() usize {
     return arg_count;
 }
-pub fn testMouse(msg: w.UINT, x: i32, y: i32) void {
-    _ = mainWndProc(hwnd_main, msg, 0, w.makeLParam(x, y));
+pub fn testMouse(msg: w.MouseMsg, x: i32, y: i32) void {
+    switch (msg) {
+        .left_down, .left_dblclk => _ = onLeftDown(hwnd_main, x, y),
+        .left_up => _ = onLeftUp(hwnd_main, x, y),
+        .right_down, .right_dblclk => _ = onRightDown(hwnd_main, x, y),
+        .right_up => _ = onRightUp(hwnd_main, x, y),
+        .middle_down => _ = onMiddleDown(hwnd_main, x, y),
+        .middle_up => _ = onMiddleUp(hwnd_main, x, y),
+        .move => _ = onMouseMove(hwnd_main, x, y),
+    }
 }
 /// 菜单里到底挂了哪些命令：遍历菜单栏的每个下拉，收集所有命令 ID。
 /// 不给真实点击菜单的机会（那会进模态循环），所以直接查系统里的菜单句柄。
@@ -2660,7 +2735,7 @@ pub fn testIconResourceOk() bool {
     return w.LoadImageW(hinst, w.resId(ICON_RES_ID), w.IMAGE_ICON, 16, 16, w.LR_DEFAULTCOLOR) != null;
 }
 pub fn testKey(vk: w.WPARAM) w.LRESULT {
-    return mainWndProc(hwnd_main, w.WM.KEYDOWN, vk, 0);
+    return onKeyDown(vk);
 }
 // ---- 对话框与渲染的测试钩子 ----
 pub fn testOpenDialog() bool {
@@ -2769,3 +2844,5 @@ pub fn testScoresText() []const u16 {
 pub fn testBackdate(ms: u32) void {
     game.t0 = nowMs() -% ms;
 }
+
+

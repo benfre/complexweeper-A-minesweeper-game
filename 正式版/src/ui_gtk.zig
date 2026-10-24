@@ -1544,10 +1544,20 @@ pub fn GetMenuState(menu: HMENU, item: UINT, flags: UINT) UINT {
     return 0;
 }
 
+/// 程序化同步 checked 到 GTK 控件时置位，挡住 set_active 内部 gtk_menu_item_activate
+/// 转发回来的 "activate" → onMenuActivate，避免同步——命令——同步无限递归（栈溢出）。
+/// 换档 / 缩放都会走到 checkMenu → CheckMenuRadioItem → set_active，把上一位清掉时
+/// set_active 会发出 activate，若不拦下来就会重入 handleCommand 再 checkMenu 一路套娃。
+var menu_syncing = false;
+
 /// 标记可复选并把 checked 同步回 GTK 控件（控件未建时只改标记，等 buildMenuBar 按状态建）。
 fn syncCheck(e: *MenuEntry) void {
     e.checkable = true;
-    if (e.widget) |w| gtk_check_menu_item_set_active(@ptrCast(w), if (e.checked) 1 else 0);
+    if (e.widget) |w| {
+        menu_syncing = true;
+        gtk_check_menu_item_set_active(@ptrCast(w), if (e.checked) 1 else 0);
+        menu_syncing = false;
+    }
 }
 
 pub fn CheckMenuItem(menu: HMENU, item: UINT, flags: UINT) DWORD {
@@ -1606,6 +1616,7 @@ fn zLabel(e: *const MenuEntry) [*:0]const u8 {
 
 fn onMenuActivate(item: ?*GtkWidget, user: ?*anyopaque) callconv(.c) void {
     _ = item;
+    if (menu_syncing) return; // 程序化同步回的 activate，别当成真实点击再触发命令
     const mc: *MenuCmd = @ptrCast(@alignCast(user.?));
     if (mc.win.proc) |p| _ = p(@ptrCast(mc.win), WM.COMMAND, mc.id, 0);
 }

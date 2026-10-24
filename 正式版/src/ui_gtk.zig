@@ -1724,11 +1724,95 @@ pub fn MessageBoxIndirectW(p: *const MSGBOXPARAMS) i32 {
     _ = p;
     return 1;
 }
+// ------------------------------------------------------------------ 音频（SDL2_mixer）
+// Win32 的 PlaySoundW(SND_MEMORY | SND_ASYNC) 在这里落到 SDL2_mixer：把内存里整段
+// WAV 解码成 chunk，再用 -1 通道异步播放；传空指针 = 停止所有正在响的音。
+// 嵌入式音效指针地址稳定，所以按指针缓存 chunk（6 段音效各自只解码一次、常驻内存），
+// 既避免每次播放都重新解码，也避开 Mix_QuickLoad_WAV 的「格式必须与设备一致/无错误
+// 检查」这类生命周期坑。
+const SDL_RWops = opaque {};
+const Mix_Chunk = opaque {};
+
+pub extern "SDL2_mixer" fn Mix_OpenAudio(frequency: c_int, format: u16, channels: c_int, chunksize: c_int) callconv(.c) c_int;
+pub extern "SDL2_mixer" fn Mix_LoadWAV_RW(src: ?*SDL_RWops, freesrc: c_int) callconv(.c) ?*Mix_Chunk;
+pub extern "SDL2_mixer" fn Mix_PlayChannel(channel: c_int, chunk: ?*Mix_Chunk, loops: c_int) callconv(.c) c_int;
+pub extern "SDL2_mixer" fn Mix_HaltChannel(channel: c_int) callconv(.c) c_int;
+pub extern "SDL2_mixer" fn Mix_FreeChunk(chunk: ?*Mix_Chunk) callconv(.c) void;
+pub extern "sdl2" fn SDL_RWFromConstMem(mem: ?*const anyopaque, size: c_int) callconv(.c) ?*SDL_RWops;
+
+// AUDIO_S16SYS：在小端平台（x86_64 / aarch64）上就是 AUDIO_S16LSB = 0x8010。
+const MIX_FREQUENCY: c_int = 44100;
+const MIX_FORMAT: u16 = 0x8010;
+const MIX_CHANNELS: c_int = 2;
+const MIX_CHUNKSIZE: c_int = 1024;
+
+const sdl_cache_cap: usize = 16;
+const SdlCachedChunk = struct { key: ?*const anyopaque, chunk: ?*Mix_Chunk };
+var sdl_audio_open: bool = false;
+var sdl_cache: [sdl_cache_cap]SdlCachedChunk = [_]SdlCachedChunk{.{ .key = null, .chunk = null }} ** sdl_cache_cap;
+
+/// Mix_OpenAudio 会自行初始化 SDL 音频子系统（不碰视频子系统，不与 GTK 抢显示/输入）。
+fn sdlEnsureAudio() bool {
+    if (sdl_audio_open) return true;
+    if (Mix_OpenAudio(MIX_FREQUENCY, MIX_FORMAT, MIX_CHANNELS, MIX_CHUNKSIZE) != 0) return false;
+    sdl_audio_open = true;
+    return true;
+}
+
+/// 是不是标准 RIFF/WAVE：避免把非 WAV 内存当音频喂给 SDL。
+fn wavIsRiff(b: [*]const u8) bool {
+    return b[0] == 'R' and b[1] == 'I' and b[2] == 'F' and b[3] == 'F' and
+        b[8] == 'W' and b[9] == 'A' and b[10] == 'V' and b[11] == 'E';
+}
+
+/// RIFF 头第 4..8 字节是「文件总长 - 8」（小端），加 8 即整个 WAV 的字节数。
+fn wavTotalLen(b: [*]const u8) usize {
+    const n = @as(u32, b[4]) | (@as(u32, b[5]) << 8) | (@as(u32, b[6]) << 16) | (@as(u32, b[7]) << 24);
+    return @as(usize, n) + 8;
+}
+
+fn sdlFindChunk(key: *const anyopaque) ?*Mix_Chunk {
+    for (&sdl_cache) |*slot| {
+        if (slot.key) |k| {
+            if (k == key) return slot.chunk;
+        }
+    }
+    return null;
+}
+
+fn sdlCacheChunk(key: *const anyopaque, chunk: *Mix_Chunk) bool {
+    for (&sdl_cache) |*slot| {
+        if (slot.key == null) {
+            slot.key = key;
+            slot.chunk = chunk;
+            return true;
+        }
+    }
+    Mix_FreeChunk(chunk); // 理论上到不了（只有 6 段音效）
+    return false;
+}
+
 pub fn PlaySoundW(data: ?*const anyopaque, mod: ?*anyopaque, flags: DWORD) BOOL {
-    _ = data;
     _ = mod;
-    _ = flags;
-    return TRUE; // TODO(Phase 4)：SDL2_mixer
+    const p = data orelse {
+        // PlaySoundW(NULL, …)：停止所有正在响的音（「游戏 → 声音」关掉时先掐掉当前那段）。
+        if (sdl_audio_open) _ = Mix_HaltChannel(-1);
+        return TRUE;
+    };
+    // 本项目只用 SND_MEMORY；其它来源不支持（对应 SND_NODEFAULT 的「不行就静音」语义）。
+    if ((flags & SND_MEMORY) == 0) return FALSE;
+    const bytes: [*]const u8 = @ptrCast(p);
+    if (!wavIsRiff(bytes)) return FALSE;
+    if (!sdlEnsureAudio()) return FALSE;
+
+    const chunk = sdlFindChunk(p) orelse blk: {
+        const len: c_int = @intCast(wavTotalLen(bytes));
+        const rw = SDL_RWFromConstMem(p, len) orelse return FALSE;
+        const c = Mix_LoadWAV_RW(rw, 1) orelse return FALSE;
+        if (!sdlCacheChunk(p, c)) return FALSE;
+        break :blk c;
+    };
+    return if (Mix_PlayChannel(-1, chunk, 0) == -1) FALSE else TRUE;
 }
 pub fn PrintWindow(hwnd: HWND, dc: HDC, flags: UINT) BOOL {
     _ = hwnd;

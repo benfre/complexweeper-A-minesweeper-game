@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.linkLibC();
-    inline for (.{ "gtk-3", "gdk-3", "cairo", "gobject-2.0", "glib-2.0", "pangocairo-1.0", "pango-1.0", "gdk_pixbuf-2.0" }) |lib| {
+    inline for (.{ "gtk-3", "gdk-3", "cairo", "gobject-2.0", "glib-2.0", "pangocairo-1.0", "pango-1.0", "gdk_pixbuf-2.0", "sdl2", "SDL2_mixer" }) |lib| {
         exe.linkSystemLibrary(lib);
     }
     b.installArtifact(exe);

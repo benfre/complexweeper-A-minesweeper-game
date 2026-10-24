@@ -395,6 +395,12 @@ const GTK_WINDOW_TOPLEVEL: GtkWindowType = 0;
 const GtkWidget = opaque {};
 const GtkWindow = opaque {};
 const GtkContainer = opaque {};
+const GtkBox = opaque {};
+const GtkMenuBar = opaque {};
+const GtkMenu = opaque {};
+const GtkMenuShell = opaque {};
+const GtkMenuItem = opaque {};
+const GtkCheckMenuItem = opaque {};
 const cairo_t = opaque {};
 const cairo_surface_t = opaque {};
 
@@ -405,6 +411,7 @@ const GDK_BUTTON_PRESS_MASK: c_int = 0x100;
 const GDK_BUTTON_RELEASE_MASK: c_int = 0x200;
 const GDK_POINTER_MOTION_MASK: c_int = 0x40;
 const GDK_KEY_PRESS_MASK: c_int = 0x400;
+const GTK_ORIENTATION_VERTICAL: c_int = 1;
 
 // GDK 事件结构：只声明到我们要读的字段，偏移按 x86_64 GTK3 ABI 自然对齐
 const GdkEventButton = extern struct {
@@ -473,6 +480,17 @@ pub extern "cairo" fn cairo_image_surface_create_for_data(data: [*]u8, format: c
 pub extern "cairo" fn cairo_surface_destroy(s: ?*cairo_surface_t) callconv(.c) void;
 pub extern "cairo" fn cairo_set_source_surface(cr: ?*cairo_t, s: ?*cairo_surface_t, x: f64, y: f64) callconv(.c) void;
 pub extern "cairo" fn cairo_paint(cr: ?*cairo_t) callconv(.c) void;
+pub extern "gtk-3" fn gtk_box_new(orientation: c_int, spacing: c_int) callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_box_pack_start(box: ?*GtkBox, child: ?*GtkWidget, expand: c_int, fill: c_int, padding: c_uint) callconv(.c) void;
+pub extern "gtk-3" fn gtk_menu_bar_new() callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_menu_new() callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_menu_item_new_with_mnemonic(label: [*:0]const u8) callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_check_menu_item_new_with_mnemonic(label: [*:0]const u8) callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_separator_menu_item_new() callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_menu_item_set_submenu(item: ?*GtkMenuItem, submenu: ?*GtkWidget) callconv(.c) void;
+pub extern "gtk-3" fn gtk_menu_shell_append(shell: ?*GtkMenuShell, item: ?*GtkWidget) callconv(.c) void;
+pub extern "gtk-3" fn gtk_check_menu_item_set_active(item: ?*GtkCheckMenuItem, active: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_check_menu_item_set_draw_as_radio(item: ?*GtkCheckMenuItem, draw_as_radio: c_int) callconv(.c) void;
 
 // ------------------------------------------------------------------ 内部运行时结构
 // ------------------------------------------------------------------ 内部运行时结构
@@ -559,15 +577,21 @@ const Dc = struct {
 };
 
 /// 菜单镜像：按位置可查命令 ID / 复选态 / 子菜单
+const MAX_LABEL = 160; // UTF-8 菜单文字上限（含 _ 助记符；\t 提示已截断）
 const MenuEntry = struct {
-    id: i32 = -1, // -1 = 分隔线 / 子菜单
+    id: i32 = -1, // -1 = 子菜单；0 = 分隔线；>0 = 命令号
     sub: ?*Menu = null,
     checked: bool = false,
+    checkable: bool = false, // 被 CheckMenuItem/CheckMenuRadioItem 动过 → 建 GtkCheckMenuItem（圆点）
+    widget: ?*GtkWidget = null, // 挂在 GtkMenu/GtkMenuBar 里的 GtkMenuItem
+    label: [MAX_LABEL]u8 = [_]u8{0} ** MAX_LABEL,
+    label_len: usize = 0,
 };
 const MENU_MAX = 24;
 const Menu = struct {
     entries: [MENU_MAX]MenuEntry = undefined,
     count: usize = 0,
+    widget: ?*GtkWidget = null, // GtkMenuBar（顶栏）或 GtkMenu（子菜单）
 };
 
 /// 逻辑窗口：客户区尺寸 + 菜单栏/控件 ID + 文本 + 父子关系 + GTK 挂载点
@@ -999,7 +1023,12 @@ fn buildGtkWindow(win: *Window) void {
     gtk_widget_set_size_request(da, cw, ch);
     gtk_widget_add_events(da, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK | GDK_KEY_PRESS_MASK);
     gtk_widget_set_can_focus(da, 1);
-    gtk_container_add(@ptrCast(gw), da);
+    const box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0) orelse return;
+    if (win.menu) |bar| {
+        if (buildMenuBar(win, bar)) |mb| gtk_box_pack_start(@ptrCast(box), mb, 0, 0, 0);
+    }
+    gtk_box_pack_start(@ptrCast(box), da, 1, 1, 0);
+    gtk_container_add(@ptrCast(gw), box);
     gtk_window_set_resizable(@ptrCast(gw), 0);
     ensureFramebuffer(win);
     _ = g_signal_connect_data(@ptrCast(da), "draw", @ptrCast(&onDraw), @ptrCast(win), null, 0);
@@ -1433,18 +1462,40 @@ pub fn CreatePopupMenu() HMENU {
     return @ptrCast(m);
 }
 
+/// 把 Win32 风格菜单文字（UTF-16，含 & 加速键与 \t 提示）转成 GTK 标签：& → _ 助记符，截断 \t 之后。
+fn storeLabel(e: *MenuEntry, label: LPCWSTR) void {
+    e.label_len = 0;
+    const s = label orelse return;
+    var ubuf: [MAX_TEXT]u16 = [_]u16{0} ** MAX_TEXT;
+    var n = copyWstr(&ubuf, s);
+    if (n > MAX_TEXT - 1) n = MAX_TEXT - 1;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (ubuf[i] == 0x09) break; // 截断 \t 加速键提示
+    }
+    n = i;
+    for (ubuf[0..n]) |*c| {
+        if (c.* == 0x26) c.* = 0x5F; // & → _ 助记符
+    }
+    const n8 = std.unicode.utf16LeToUtf8(&e.label, ubuf[0..n]) catch return;
+    e.label_len = if (n8 >= MAX_LABEL) MAX_LABEL - 1 else n8;
+    e.label[e.label_len] = 0; // 兜底补 0（数组本身已零初始化）
+}
+
 pub fn AppendMenuW(menu: HMENU, flags: UINT, id_new: usize, label: LPCWSTR) BOOL {
     const m = menuPtr(menu) orelse return FALSE;
-    _ = label;
     if (m.count >= MENU_MAX) return FALSE;
     const e = &m.entries[m.count];
     if (flags & MF.SEPARATOR != 0) {
         e.* = .{ .id = 0, .sub = null, .checked = false }; // 分隔线 ID = 0（Win32 GetMenuItemID 语义）
+        storeLabel(e, null);
     } else if (flags & MF.POPUP != 0) {
         const sub: *Menu = @ptrFromInt(id_new);
         e.* = .{ .id = -1, .sub = sub, .checked = false };
+        storeLabel(e, label);
     } else {
         e.* = .{ .id = @intCast(@as(u32, @truncate(id_new))), .sub = null, .checked = false };
+        storeLabel(e, label);
     }
     m.count += 1;
     return TRUE;
@@ -1493,6 +1544,12 @@ pub fn GetMenuState(menu: HMENU, item: UINT, flags: UINT) UINT {
     return 0;
 }
 
+/// 标记可复选并把 checked 同步回 GTK 控件（控件未建时只改标记，等 buildMenuBar 按状态建）。
+fn syncCheck(e: *MenuEntry) void {
+    e.checkable = true;
+    if (e.widget) |w| gtk_check_menu_item_set_active(@ptrCast(w), if (e.checked) 1 else 0);
+}
+
 pub fn CheckMenuItem(menu: HMENU, item: UINT, flags: UINT) DWORD {
     const m = menuPtr(menu) orelse return 0xFFFFFFFF;
     const want = (flags & MF.CHECKED) != 0;
@@ -1502,11 +1559,13 @@ pub fn CheckMenuItem(menu: HMENU, item: UINT, flags: UINT) DWORD {
         if (i >= m.count) return 0xFFFFFFFF;
         if (m.entries[i].checked) old = MF.CHECKED;
         m.entries[i].checked = want;
+        syncCheck(&m.entries[i]);
     } else {
         for (m.entries[0..m.count]) |*e| {
             if (@as(UINT, @bitCast(e.id)) != item) continue;
             if (e.checked) old = MF.CHECKED;
             e.checked = want;
+            syncCheck(e);
         }
     }
     return old;
@@ -1522,6 +1581,7 @@ pub fn CheckMenuRadioItem(menu: HMENU, first: UINT, last: UINT, checked: UINT, f
         } else @bitCast(e.id);
         if (key < first or key > last) continue;
         e.checked = (key == checked);
+        syncCheck(e);
     }
     return TRUE;
 }
@@ -1531,6 +1591,71 @@ pub fn EnableMenuItem(menu: HMENU, item: UINT, flags: UINT) BOOL {
     _ = item;
     _ = flags;
     return TRUE;
+}
+
+// ------------------------------------------------------------------ GTK 菜单栏
+// 把菜单镜像树（AppendMenuW 存的 label / id / sub / checked）建成真 GtkMenuBar：
+// 顶栏条目 = GtkMenuItem + 子菜单；命令项点一下 → WM_COMMAND(id)。
+// 被 CheckMenuItem/CheckMenuRadioItem 动过的项建成 GtkCheckMenuItem 并画成圆点，
+// 之后 CheckMenuItem/CheckMenuRadioItem 走 syncCheck 把 checked 同步回控件。
+const MenuCmd = struct { win: *Window, id: usize };
+
+fn zLabel(e: *const MenuEntry) [*:0]const u8 {
+    return e.label[0..e.label_len :0].ptr;
+}
+
+fn onMenuActivate(item: ?*GtkWidget, user: ?*anyopaque) callconv(.c) void {
+    _ = item;
+    const mc: *MenuCmd = @ptrCast(@alignCast(user.?));
+    if (mc.win.proc) |p| _ = p(@ptrCast(mc.win), WM.COMMAND, mc.id, 0);
+}
+
+fn populateMenu(win: *Window, m: *Menu) void {
+    const gmenu: *GtkWidget = m.widget orelse return; // buildMenuBar 里已建好并挂到条目
+    for (m.entries[0..m.count]) |*e| {
+        if (e.sub) |sub| {
+            const item = gtk_menu_item_new_with_mnemonic(zLabel(e)) orelse continue;
+            e.widget = item;
+            const submenu = gtk_menu_new() orelse continue;
+            sub.widget = submenu;
+            gtk_menu_item_set_submenu(@ptrCast(item), @ptrCast(submenu));
+            populateMenu(win, sub);
+            gtk_menu_shell_append(@ptrCast(gmenu), item);
+        } else if (e.id == 0) {
+            const sep = gtk_separator_menu_item_new() orelse continue;
+            gtk_menu_shell_append(@ptrCast(gmenu), sep);
+        } else {
+            const it = (if (e.checkable)
+                gtk_check_menu_item_new_with_mnemonic(zLabel(e))
+            else
+                gtk_menu_item_new_with_mnemonic(zLabel(e))) orelse continue;
+            e.widget = it;
+            if (e.checkable) {
+                gtk_check_menu_item_set_draw_as_radio(@ptrCast(it), 1);
+                gtk_check_menu_item_set_active(@ptrCast(it), if (e.checked) 1 else 0);
+            }
+            const mc = page.create(MenuCmd) catch continue;
+            mc.* = .{ .win = win, .id = @intCast(e.id) };
+            _ = g_signal_connect_data(@ptrCast(it), "activate", @ptrCast(&onMenuActivate), @ptrCast(mc), null, 0);
+            gtk_menu_shell_append(@ptrCast(gmenu), it);
+        }
+    }
+}
+
+fn buildMenuBar(win: *Window, bar: *Menu) ?*GtkWidget {
+    const mb = gtk_menu_bar_new() orelse return null;
+    bar.widget = mb;
+    for (bar.entries[0..bar.count]) |*e| {
+        const sub = e.sub orelse continue; // 顶栏只装子菜单
+        const item = gtk_menu_item_new_with_mnemonic(zLabel(e)) orelse continue;
+        e.widget = item;
+        const submenu = gtk_menu_new() orelse continue;
+        sub.widget = submenu;
+        gtk_menu_item_set_submenu(@ptrCast(item), @ptrCast(submenu));
+        populateMenu(win, sub);
+        gtk_menu_shell_append(@ptrCast(mb), item);
+    }
+    return mb;
 }
 
 // ------------------------------------------------------------------ 图标 / 光标 / 字体

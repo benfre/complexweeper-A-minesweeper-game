@@ -6,7 +6,7 @@
 
 无论胜利还是失败，游戏都会在结局告诉玩家标错和标对了哪些雷。
 
-原生 Windows 程序，Zig + Win32，没有第三方库和运行依赖。
+Windows 原生程序（Zig + Win32，无第三方库和运行依赖）；另有 Linux 版（Zig + GTK3 + SDL2_mixer）。
 
 
 
@@ -58,7 +58,55 @@ i, √3i, 2i, √5i, √7i, 2√2i, 3i, 2√3i, √15i, 4i, √21i, 2√6i, 5i, 
 
 
 
-素材来源：
+## 构建与安装
+
+依赖：Zig 0.14.1、Node.js 20（生成图集用）。
+
+### Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File 正式版/build.ps1       # 构建 + 两套自检
+powershell -ExecutionPolicy Bypass -File 正式版/build.ps1 -NoTest
+```
+
+产物为 `正式版/复扫雷.exe`（及带版本号的那份）。图标在构建期由 `tools/set_icon.js` 直接注入 exe 的
+PE 资源（.rsrc），不需要单独的文件。
+
+### Linux
+
+先装系统库（Debian/Ubuntu 为例，图形界面运行与编译都需要）：
+
+```bash
+sudo apt install libgtk-3-dev libcairo2-dev libglib2.0-dev libpango1.0-dev \
+                 libgdk-pixbuf-2.0-dev libsdl2-dev libsdl2-mixer-dev
+```
+
+再构建并安装：
+
+```bash
+cd 正式版
+node tools/gen_atlas.js          # 从 素材/ 生成 src/atlas.bin 与 src/assets.zig
+zig build                        # 产物 zig-out/bin/cs_gtk
+./install-linux.sh               # 装到 ~/.local（无需 root）
+./install-linux.sh --prefix=/usr # 或装到系统目录（需 root）
+./install-linux.sh --uninstall   # 卸载
+```
+
+不想自己编译的，也可以下载发布页的 `complexweeper-<版本>-linux-x86_64.tar.gz`
+（二进制、图标、安装脚本都打包好了），解压后进目录直接装：
+
+```bash
+tar xzf complexweeper-1.3.0-linux-x86_64.tar.gz
+cd complexweeper-1.3.0-linux-x86_64
+./install-linux.sh            # 无需 node/zig/编译工具链
+./install-linux.sh --uninstall
+```
+
+安装做三件事：装可执行文件、装图标 PNG、写 `.desktop` 菜单项。Linux 的图标**不在可执行文件里**
+（Windows 是把 .ico 注进 PE 资源），而是安装时由 `tools/make_icon_png.js` 从图集的 `icon` 槽位抠出
+PNG，装进 `hicolor` 图标主题，再靠 `.desktop` 的 `Icon=` 引用；所以「图标 + .desktop」二者缺一不可。
+
+## 素材来源：
 扫雷原始图像素材：Microsoft（原版扫雷作者 Robert Donner、Curt Johnson）。
 新增图像素材（新增的显示值、四种旗帜、伪数码管的i、j单位、人脸按钮等）：青月晓。
 程序图标：青月晓。

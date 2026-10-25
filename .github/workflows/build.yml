@@ -1,6 +1,6 @@
 name: build
 
-# push / PR 都构建一遍，附件里给出 exe 与两份自检报告
+# push / PR 都构建一遍：Windows 出 exe，Linux 出二进制 + 图标 PNG，各附两份自检报告
 on:
   push:
     branches: [main]
@@ -59,6 +59,61 @@ jobs:
           name: complexweeper-${{ github.sha }}
           path: |
             正式版/复扫雷*.exe
+            正式版/build/selftest.txt
+            正式版/build/uitest.txt
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: 装 GTK3 / SDL2 开发库
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libcairo2-dev libglib2.0-dev libpango1.0-dev \
+            libgdk-pixbuf-2.0-dev libsdl2-dev libsdl2-mixer-dev pkg-config
+
+      - name: 装 Zig 0.14.1
+        run: |
+          set -euo pipefail
+          url='https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz'
+          curl -sL "$url" -o "$RUNNER_TEMP/zig.tar.xz"
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          dir=$(find "$RUNNER_TEMP" -maxdepth 1 -type d -name 'zig-*linux*' | head -1)
+          [ -n "$dir" ] || { echo '解压后找不到 zig 目录' >&2; exit 1; }
+          echo "$dir" >> "$GITHUB_PATH"     # 只对后续 step 生效，本步仍用全路径
+          got=$("$dir/zig" version)
+          echo "zig = $got（$(basename "$dir")）"
+          [ "$got" = '0.14.1' ] || { echo "Zig 版本不对：$got，本工程按 0.14.1 写"; exit 1; }
+
+      - name: 生成图集 + 图标 PNG + 编译
+        run: |
+          set -euo pipefail
+          cd 正式版
+          node tools/gen_atlas.js
+          node tools/make_icon_png.js build/icons 32 48 64 128 256
+          zig build
+
+      - name: 两套自检（规则 + 界面消息级）
+        run: |
+          set -euo pipefail
+          cd 正式版
+          ./zig-out/bin/cs_gtk --selftest build/selftest.txt && cat build/selftest.txt
+          ./zig-out/bin/cs_gtk --uitest  build/uitest.txt  && cat build/uitest.txt
+
+      - name: 上传产物与自检报告
+        uses: actions/upload-artifact@v5
+        with:
+          name: complexweeper-linux-${{ github.sha }}
+          path: |
+            正式版/zig-out/bin/cs_gtk
+            正式版/build/icons/complexweeper-*.png
             正式版/build/selftest.txt
             正式版/build/uitest.txt
           if-no-files-found: error

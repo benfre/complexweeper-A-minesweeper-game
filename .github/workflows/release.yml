@@ -1,6 +1,8 @@
 name: release
 
-# 推 v* 标签 → 构建 → 建 Release 并附上 exe（中文名 + 一个纯 ASCII 名，省得下载链接被转义）
+# 推 v* 标签 → 构建 → 建 Release 并附上产物：
+#   Windows：exe（中文名 + 一个纯 ASCII 名，省得下载链接被转义）
+#   Linux：  tar.gz 包（二进制 + 图标 + 安装脚本）
 on:
   push:
     tags: ['v*']
@@ -10,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -66,3 +68,82 @@ jobs:
           gh release edit $tag --draft=false --latest | Out-Null
           Write-Host '--- Release 附件 ---'
           gh release view $tag --json assets --jq '.assets[] | "  \(.name)  \(.size) 字节"'
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: 装 GTK3 / SDL2 开发库
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libcairo2-dev libglib2.0-dev libpango1.0-dev \
+            libgdk-pixbuf-2.0-dev libsdl2-dev libsdl2-mixer-dev pkg-config
+
+      - name: 装 Zig 0.14.1
+        run: |
+          set -euo pipefail
+          url='https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz'
+          curl -sL "$url" -o "$RUNNER_TEMP/zig.tar.xz"
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          dir=$(find "$RUNNER_TEMP" -maxdepth 1 -type d -name 'zig-*linux*' | head -1)
+          [ -n "$dir" ] || { echo '解压后找不到 zig 目录' >&2; exit 1; }
+          echo "$dir" >> "$GITHUB_PATH"
+          got=$("$dir/zig" version)
+          echo "zig = $got"
+          [ "$got" = '0.14.1' ] || { echo "Zig 版本不对：$got，本工程按 0.14.1 写"; exit 1; }
+
+      - name: 构建 + 两套自检
+        run: |
+          set -euo pipefail
+          cd 正式版
+          node tools/gen_atlas.js
+          node tools/make_icon_png.js build/icons 32 48 64 128 256
+          zig build
+          ./zig-out/bin/cs_gtk --selftest build/selftest.txt && cat build/selftest.txt
+          ./zig-out/bin/cs_gtk --uitest  build/uitest.txt  && cat build/uitest.txt
+
+      - name: 打包 Release 产物
+        run: |
+          set -euo pipefail
+          v=$(sed -n 's/.*const APP_VERSION = "\([0-9.]*\)";.*/\1/p' 正式版/src/main.zig | head -1)
+          [ -n "$v" ] || { echo '读不到 APP_VERSION' >&2; exit 1; }
+          pkg="complexweeper-$v-linux-x86_64"
+          mkdir -p "dist/$pkg/icons"
+          install -m 0755 正式版/zig-out/bin/cs_gtk "dist/$pkg/complexweeper"
+          printf '%s\n' "$v" > "dist/$pkg/VERSION"
+          for s in 32 48 64 128 256; do
+            install -m 0644 "正式版/build/icons/complexweeper-$s.png" "dist/$pkg/icons/complexweeper-$s.png"
+          done
+          install -m 0755 正式版/install-linux.sh "dist/$pkg/install-linux.sh"
+          tar -C dist -czf "complexweeper-$v-linux-x86_64.tar.gz" "$pkg"
+          echo '--- 包内容 ---'
+          find "dist/$pkg" -type f | sort
+
+      - name: 发 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v=$(sed -n 's/.*const APP_VERSION = "\([0-9.]*\)";.*/\1/p' 正式版/src/main.zig | head -1)
+          tag="${GITHUB_REF_NAME}"
+          asset="complexweeper-$v-linux-x86_64.tar.gz"
+          [ -f "$asset" ] || { echo "找不到 $asset" >&2; exit 1; }
+          # 两个 job 并发时可能同时建 Release：先看有没有，没有再建，重试兜底
+          ready=0
+          for i in 1 2 3 4 5 6; do
+            if gh release view "$tag" >/dev/null 2>&1; then ready=1; break; fi
+            if gh release create "$tag" --title "复扫雷 Complexweeper $v" \
+                 --generate-notes --verify-tag >/dev/null 2>&1; then ready=1; break; fi
+            sleep 5
+          done
+          [ "$ready" = 1 ] || { echo '创建/复用 Release 失败' >&2; exit 1; }
+          gh release upload "$tag" "$asset" --clobber
+          gh release edit "$tag" --draft=false --latest >/dev/null
+          echo '--- Release 附件 ---'
+          gh release view "$tag" --json assets --jq '.assets[] | "  \(.name)  \(.size) 字节"'

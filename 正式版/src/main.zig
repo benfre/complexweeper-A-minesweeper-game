@@ -1,6 +1,7 @@
 // 复扫雷 正式版 · 主程序
 // 纯 Win32 + GDI，无第三方库、无 libc、无运行时依赖，编译结果为单个 exe。
 const std = @import("std");
+const builtin = @import("builtin");
 const w = @import("ui.zig");
 const g = @import("game.zig");
 const A = @import("assets.zig");
@@ -906,32 +907,29 @@ fn dlgWndProc(hwnd: w.HWND, msg: w.UINT, wp: w.WPARAM, lp: w.LPARAM) callconv(.c
     }
 }
 
-fn dlgApply() void {
-    const h = getEditInt(edit_handles[0], 16);
-    const ww = getEditInt(edit_handles[1], 30);
-    const t = readDlgCounts();
+fn applyCustomVals(h: i32, ww: i32, t: [5]i32) bool {
     var sum: i32 = 0;
     for (1..5) |k| sum += t[k];
     if (h < 9 or h > 30) {
         dlg_state.err = .height;
         setErrText();
-        return;
+        return false;
     }
     if (ww < 9 or ww > 40) {
         dlg_state.err = .width;
         setErrText();
-        return;
+        return false;
     }
     if (sum < 1) {
         dlg_state.err = .sum_zero;
         setErrText();
-        return;
+        return false;
     }
     const maxm = ww * h - 9;
     if (sum > maxm) {
         dlg_state.err = .sum_big;
         setErrText();
-        return;
+        return false;
     }
     dlg_state.err = .none;
     setErrText();
@@ -939,12 +937,68 @@ fn dlgApply() void {
     game.h = @intCast(h);
     game.mines = @intCast(sum);
     game.type_count = .{ 0, @intCast(t[1]), @intCast(t[2]), @intCast(t[3]), @intCast(t[4]) };
+    return true;
+}
 
-    dialog_done = true;
+fn dlgApply() void {
+    const h = getEditInt(edit_handles[0], 16);
+    const ww = getEditInt(edit_handles[1], 30);
+    const t = readDlgCounts();
+    if (applyCustomVals(h, ww, t)) dialog_done = true;
+}
+
+/// 原生对话框的「确定」回调（由后端调用；本身就是纯领域逻辑，与后端无关）：
+/// 校验并应用这 6 个值，失败时把错误文案写进 err（UTF-16、0 结尾）。
+fn dlgApplyVals(vals: *const [6]i32, err: [*]u16, err_cap: usize) callconv(.c) bool {
+    const t = [5]i32{ 0, vals[2], vals[3], vals[4], vals[5] };
+    dialog_cancel = false;
+    if (applyCustomVals(vals[0], vals[1], t)) {
+        dialog_done = true;
+        return true;
+    }
+    dialog_done = false;
+    const txt = dlgErrText(dlg_state.err);
+    var i: usize = 0;
+    while (i < err_cap) : (i += 1) {
+        err[i] = txt[i];
+        if (txt[i] == 0) break;
+    }
+    return false;
+}
+
+/// 原生对话框的「按合计均分」回调（由后端调用；纯领域逻辑）：按当前四雷值改写 vals[2..5]。
+fn dlgSplitVals(vals: *[6]i32) callconv(.c) void {
+    var sum: i32 = 0;
+    for (2..6) |k| sum += vals[k];
+    if (sum <= 0) sum = 99;
+    const sp = g.splitEvenly(@intCast(@min(sum, 999)));
+    for (1..5) |k| vals[k + 1] = sp[k];
 }
 
 fn setErrText() void {
     _ = w.SetWindowTextW(dlg_err_hwnd, dlgErrText(dlg_state.err));
+}
+
+/// 填对话框初值：当前盘面尺寸 + 四种雷颗数（没定过就按总数均分）。
+fn prepareCustomDialogState() void {
+    dlg_state.h = game.h;
+    dlg_state.w = game.w;
+    var tc = game.type_count;
+    var any: u16 = 0;
+    for (1..5) |t| any += tc[t];
+    if (any == 0) tc = g.splitEvenly(game.mines);
+    for (1..5) |t| dlg_state.t[t] = tc[t];
+}
+
+/// 四种雷的名字随模式（对话框标签用；双曲模式写全名）。
+fn customMineNames() [4][*:0]const u16 {
+    return if (hyper())
+        [4][*:0]const u16{
+            w.wstr("正实雷（正类空雷）："),       w.wstr("负实雷（负类空雷）："),
+            w.wstr("正双曲虚雷（正类时雷）："), w.wstr("负双曲虚雷（负类时雷）："),
+        }
+    else
+        [4][*:0]const u16{ w.wstr("正实雷："), w.wstr("负实雷："), w.wstr("正虚雷："), w.wstr("负虚雷：") };
 }
 
 /// 建对话框窗口与控件。与模态循环分开，便于自检直接驱动。
@@ -970,13 +1024,7 @@ fn createCustomWindow() bool {
     const win_w = r.right - r.left;
     const win_h = r.bottom - r.top;
 
-    dlg_state.h = game.h;
-    dlg_state.w = game.w;
-    var tc = game.type_count;
-    var any: u16 = 0;
-    for (1..5) |t| any += tc[t];
-    if (any == 0) tc = g.splitEvenly(game.mines);
-    for (1..5) |t| dlg_state.t[t] = tc[t];
+    prepareCustomDialogState();
 
     var mr: w.RECT = undefined;
     _ = w.GetWindowRect(hwnd_main, &mr);
@@ -1014,13 +1062,7 @@ fn createCustomWindow() bool {
 
     // 四种雷的名字随模式。双曲（闵可夫斯基）模式下写全名「正实雷（正类空雷）」这种格式，
     // 标签长得多，所以四种雷改成一行一种竖着排，编辑框统一右移到 x=196。
-    const names = if (hyper())
-        [4][*:0]const u16{
-            w.wstr("正实雷（正类空雷）："),       w.wstr("负实雷（负类空雷）："),
-            w.wstr("正双曲虚雷（正类时雷）："), w.wstr("负双曲虚雷（负类时雷）："),
-        }
-    else
-        [4][*:0]const u16{ w.wstr("正实雷："), w.wstr("负实雷："), w.wstr("正虚雷："), w.wstr("负虚雷：") };
+    const names = customMineNames();
     var k: usize = 0;
     while (k < 4) : (k += 1) {
         const yy = y + @as(i32, @intCast(k)) * 28;
@@ -1055,16 +1097,40 @@ fn closeCustomWindow() void {
 }
 
 fn runCustomDialog() bool {
-    if (!createCustomWindow()) return false;
-    var msg: w.MSG = undefined;
-    while (!dialog_done) {
-        const r2 = w.GetMessageW(&msg, null, 0, 0);
-        if (r2 <= 0) break;
-        _ = w.TranslateMessage(&msg);
-        _ = w.DispatchMessageW(&msg);
+    // Windows：沿用原来的 Win32 模态循环（子控件与消息队列都是真原生控件）。
+    if (builtin.os.tag == .windows) {
+        if (!createCustomWindow()) return false;
+        var msg: w.MSG = undefined;
+        while (!dialog_done) {
+            const r2 = w.GetMessageW(&msg, null, 0, 0);
+            if (r2 <= 0) break;
+            _ = w.TranslateMessage(&msg);
+            _ = w.DispatchMessageW(&msg);
+        }
+        closeCustomWindow();
+        return !dialog_cancel;
     }
-    closeCustomWindow();
-    return !dialog_cancel;
+
+    // 非 Windows 后端：走后端的原生对话框实现（当前是 GTK3 的 GtkDialog），校验/结算/均分仍由上面的回调注入。
+    dialog_done = false;
+    dialog_cancel = false;
+    prepareCustomDialogState();
+    const names = customMineNames();
+    var fields = [6]w.CustomDialog.Field{
+        .{ .label = w.wstr("高度(H)："), .hint = w.wstr("9 – 30 行"), .value = dlg_state.h },
+        .{ .label = w.wstr("宽度(W)："), .hint = w.wstr("9 – 40 列"), .value = dlg_state.w },
+        .{ .label = names[0], .hint = w.wstr(""), .value = dlg_state.t[1] },
+        .{ .label = names[1], .hint = w.wstr(""), .value = dlg_state.t[2] },
+        .{ .label = names[2], .hint = w.wstr(""), .value = dlg_state.t[3] },
+        .{ .label = names[3], .hint = w.wstr(""), .value = dlg_state.t[4] },
+    };
+    const cb = w.CustomDialog.Callbacks{
+        .apply = dlgApplyVals,
+        .split = dlgSplitVals,
+    };
+    var ok: bool = false;
+    w.RunCustomDialog(hwnd_main, w.wstr("自定义雷区"), &fields, &cb, &ok);
+    return ok;
 }
 
 // ------------------------------------------------------------------ 最高分纪录
@@ -1595,7 +1661,7 @@ const MENU_HELP: usize = 304;
 
 const MENU_MODEL = [_]w.MenuItem{
     .{ .label = "游戏(&G)", .id = MENU_GAME, .items = &[_]w.MenuItem{
-        .{ .label = "开局(&N)\tF2", .id = IDM_NEW },
+        .{ .label = "开局(&N)\tF3", .id = IDM_NEW },
         .{ .label = "", .id = 0 },
         .{ .label = "圆复数模式(&C)", .id = MENU_CMPLX, .items = &[_]w.MenuItem{
             .{ .label = "初级(&B)\t9×9 · 10 雷", .id = IDM_BEGINNER },

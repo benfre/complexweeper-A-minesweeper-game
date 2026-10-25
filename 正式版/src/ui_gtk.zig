@@ -404,6 +404,9 @@ const GtkCheckMenuItem = opaque {};
 const GtkDialog = opaque {};
 const GtkLabel = opaque {};
 const GtkImage = opaque {};
+const GtkGrid = opaque {};
+const GtkEntry = opaque {};
+const GtkButton = opaque {};
 const cairo_t = opaque {};
 const cairo_surface_t = opaque {};
 
@@ -509,6 +512,15 @@ pub extern "gtk-3" fn gtk_label_set_xalign(l: ?*GtkLabel, x: f32) callconv(.c) v
 pub extern "gtk-3" fn gtk_label_set_justify(l: ?*GtkLabel, j: c_int) callconv(.c) void;
 pub extern "gtk-3" fn gtk_label_set_selectable(l: ?*GtkLabel, s: c_int) callconv(.c) void;
 pub extern "gtk-3" fn gtk_image_new_from_icon_name(icon_name: [*:0]const u8, size: c_int) callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_grid_new() callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_grid_set_column_spacing(g: ?*GtkGrid, spacing: c_uint) callconv(.c) void;
+pub extern "gtk-3" fn gtk_grid_set_row_spacing(g: ?*GtkGrid, spacing: c_uint) callconv(.c) void;
+pub extern "gtk-3" fn gtk_grid_attach(g: ?*GtkGrid, child: ?*GtkWidget, left: c_int, top: c_int, width: c_int, height: c_int) callconv(.c) void;
+pub extern "gtk-3" fn gtk_entry_new() callconv(.c) ?*GtkWidget;
+pub extern "gtk-3" fn gtk_entry_set_text(e: ?*GtkEntry, text: [*:0]const u8) callconv(.c) void;
+pub extern "gtk-3" fn gtk_entry_get_text(e: ?*GtkEntry) callconv(.c) [*:0]const u8;
+pub extern "gtk-3" fn gtk_label_set_text(l: ?*GtkLabel, text: [*:0]const u8) callconv(.c) void;
+pub extern "gtk-3" fn gtk_button_new_with_label(label: [*:0]const u8) callconv(.c) ?*GtkWidget;
 
 // ------------------------------------------------------------------ 内部运行时结构
 // ------------------------------------------------------------------ 内部运行时结构
@@ -2095,4 +2107,150 @@ pub fn RegCloseKey(key: usize) callconv(.c) i32 {
     regSave(k);
     page.destroy(k);
     return 0;
+}
+// ------------------------------------------------------------------ 自定义雷区对话框（GTK 原生）
+// Win32 侧用「EDIT / BUTTON / STATIC 子窗口 + 模态消息循环」搭这个对话框；但 ui_gtk 不渲染
+// 子控件、也没有消息队列，走那套只能得到一块空白、点不动、关不掉的窗口。所以这里像
+// MessageBoxW 一样用 GTK3 原生控件（GtkDialog + GtkGrid + GtkEntry + GtkButton）重画，
+// gtk_dialog_run 负责模态；校验 / 结算 / 均分仍由调用方通过回调注入（main.zig 里那套
+// dlgApply），GTK 侧只负责把 6 个输入框读出来传给回调、再把回调改写的值写回控件。
+pub const CustomDialog = struct {
+    /// 6 个整数输入框：高、宽、四种雷各一颗数。
+    pub const Field = struct {
+        label: [*:0]const u16,
+        hint: [*:0]const u16,
+        value: i32,
+    };
+    pub const Callbacks = struct {
+        /// 点「确定」：校验 vals 并应用。返回 true = 通过、关闭对话框；
+        /// false = 不通过，把错误文案写进 err（UTF-16、0 结尾，err_cap 是 u16 个数）。
+        apply: *const fn (vals: *const [6]i32, err: [*]u16, err_cap: usize) callconv(.c) bool,
+        /// 点「按合计均分」：按当前 6 值改写四种雷值（vals[2..5]）。
+        split: *const fn (vals: *[6]i32) callconv(.c) void,
+    };
+};
+
+const RESP_CANCEL: c_int = 1;
+
+const CustomDlgCtx = struct {
+    cb: *const CustomDialog.Callbacks,
+    entries: [6]?*GtkWidget,
+    err_label: ?*GtkWidget,
+};
+
+fn entryGetInt(e: ?*GtkWidget) i32 {
+    const w = e orelse return 0;
+    const s = gtk_entry_get_text(@ptrCast(w));
+    var v: i32 = 0;
+    var i: usize = 0;
+    while (s[i] != 0) : (i += 1) {
+        const c = s[i];
+        if (c < '0' or c > '9') continue;
+        v = v * 10 + @as(i32, @intCast(c - '0'));
+        if (v > 100000) v = 100000;
+    }
+    return v;
+}
+
+fn entrySetInt(e: ?*GtkWidget, v: i32) void {
+    const w = e orelse return;
+    var buf: [16]u8 = [_]u8{0} ** 16;
+    const s = std.fmt.bufPrint(buf[0..15], "{d}", .{v}) catch return;
+    gtk_entry_set_text(@ptrCast(w), buf[0..s.len :0].ptr);
+}
+
+fn errLabelSet(lbl: ?*GtkWidget, err: []const u16) void {
+    const l = lbl orelse return;
+    var buf: [256]u8 = undefined;
+    const z = wideToUtf8Z(&buf, err);
+    gtk_label_set_text(@ptrCast(l), z.ptr);
+}
+
+fn doApply(ctx: *CustomDlgCtx) bool {
+    var vals = [6]i32{ 0, 0, 0, 0, 0, 0 };
+    for (0..6) |i| vals[i] = entryGetInt(ctx.entries[i]);
+    var err_buf: [256]u16 = undefined;
+    if (ctx.cb.apply(&vals, &err_buf, err_buf.len)) return true;
+    var n: usize = 0;
+    while (n < err_buf.len and err_buf[n] != 0) : (n += 1) {}
+    errLabelSet(ctx.err_label, err_buf[0..n]);
+    return false;
+}
+
+fn onSplitClicked(widget: ?*GtkWidget, user: ?*anyopaque) callconv(.c) void {
+    _ = widget;
+    const ctx: *CustomDlgCtx = @ptrCast(@alignCast(user.?));
+    var vals = [6]i32{ 0, 0, 0, 0, 0, 0 };
+    for (0..6) |i| vals[i] = entryGetInt(ctx.entries[i]);
+    ctx.cb.split(&vals);
+    for (2..6) |i| entrySetInt(ctx.entries[i], vals[i]);
+    gtk_label_set_text(@ptrCast(ctx.err_label.?), "");
+}
+
+pub fn RunCustomDialog(owner: HWND, title: LPCWSTR, fields: *[6]CustomDialog.Field, cb: *const CustomDialog.Callbacks, out_ok: *bool) void {
+    out_ok.* = false;
+    ensureGtk();
+
+    const tp = title orelse return;
+    var title_buf: [512]u8 = undefined;
+    const title_z = wideToUtf8Z(&title_buf, tp[0..wstrCount(tp)]);
+
+    const dlg_w = gtk_dialog_new() orelse return;
+    gtk_window_set_title(@ptrCast(dlg_w), title_z.ptr);
+    if (asWindow(owner)) |ow| {
+        if (ow.gtk_win) |gw| gtk_window_set_transient_for(@ptrCast(dlg_w), @ptrCast(gw));
+    }
+    gtk_window_set_modal(@ptrCast(dlg_w), 1);
+
+    const content = gtk_dialog_get_content_area(@ptrCast(dlg_w));
+    const grid = gtk_grid_new() orelse return;
+    gtk_grid_set_column_spacing(@ptrCast(grid), 12);
+    gtk_grid_set_row_spacing(@ptrCast(grid), 6);
+
+    var entries: [6]?*GtkWidget = [_]?*GtkWidget{null} ** 6;
+    for (0..6) |i| {
+        const f = &fields[i];
+        var lbuf: [256]u8 = undefined;
+        const lz = wideToUtf8Z(&lbuf, f.label[0..wstrCount(f.label)]);
+        const lbl = gtk_label_new(lz.ptr) orelse continue;
+        gtk_grid_attach(@ptrCast(grid), lbl, 0, @intCast(i), 1, 1);
+
+        const ent = gtk_entry_new() orelse continue;
+        entrySetInt(ent, f.value);
+        gtk_grid_attach(@ptrCast(grid), ent, 1, @intCast(i), 1, 1);
+        entries[i] = ent;
+
+        if (wstrCount(f.hint) > 0) {
+            var hbuf: [128]u8 = undefined;
+            const hz = wideToUtf8Z(&hbuf, f.hint[0..wstrCount(f.hint)]);
+            const hlbl = gtk_label_new(hz.ptr) orelse continue;
+            gtk_grid_attach(@ptrCast(grid), hlbl, 2, @intCast(i), 1, 1);
+        }
+    }
+
+    const split_btn = gtk_button_new_with_label("按合计均分") orelse return;
+    const err_lbl = gtk_label_new("") orelse return;
+    gtk_grid_attach(@ptrCast(grid), split_btn, 0, 6, 1, 1);
+    gtk_grid_attach(@ptrCast(grid), err_lbl, 1, 6, 2, 1);
+
+    var ctx = CustomDlgCtx{ .cb = cb, .entries = entries, .err_label = err_lbl };
+    _ = g_signal_connect_data(@ptrCast(split_btn), "clicked", @ptrCast(&onSplitClicked), @ptrCast(&ctx), null, 0);
+
+    gtk_box_pack_start(@ptrCast(content), grid, 1, 1, 8);
+    _ = gtk_dialog_add_button(@ptrCast(dlg_w), "确定", GTK_RESPONSE_OK);
+    _ = gtk_dialog_add_button(@ptrCast(dlg_w), "取消", RESP_CANCEL);
+
+    gtk_widget_show_all(dlg_w);
+    var ok: bool = false;
+    while (true) {
+        const resp = gtk_dialog_run(@ptrCast(dlg_w));
+        if (resp != GTK_RESPONSE_OK) break;
+        if (doApply(&ctx)) {
+            ok = true;
+            break;
+        }
+        // 校验没过：错误标签已更新，再来一圈模态让用户改输入。
+    }
+    gtk_widget_destroy(dlg_w);
+    out_ok.* = ok;
 }

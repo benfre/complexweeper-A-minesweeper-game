@@ -129,7 +129,7 @@ pub fn run(out: *std.ArrayList(u8)) u32 {
         expect(out, std.mem.indexOf(u8, help, "分别是正实雷、负实雷、正虚雷、负虚雷") != null, "四种雷仍按雷的名字列（正实雷…）");
         expect(out, std.mem.indexOf(u8, help, "正实雷（正类空雷）、负实雷（负类空雷）、正双曲虚雷（正类时雷）、负双曲虚雷（负类时雷）") != null, "双曲（闵可夫斯基）模式那段应写四种雷的全名");
         expect(out, std.mem.indexOf(u8, help, "鼠标左键翻开格子，右键插旗") != null, "操作说明应在正文里");
-        expect(out, std.mem.indexOf(u8, help, "点击人脸或者按F2 开局") != null, "开局方式应在正文里");
+        expect(out, std.mem.indexOf(u8, help, "点击人脸或者按F3 开局") != null, "开局方式应在正文里");
         expect(out, std.mem.indexOf(u8, help, "+1") == null and std.mem.indexOf(u8, help, "-1") == null, "玩法里不该出现 +1/−1 那套符号");
         out.writer().print("0b 版本号：[{s}] · 关于程序名：[复扫雷 Complexweeper]\n", .{v}) catch {};
     }
